@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 from playwright.__main__ import main as playwright_installer
 
 # ===== CONFIGURAÇÕES GERAIS =====
-VERSAO_ATUAL = "1.4" 
+VERSAO_ATUAL = "1.5" 
 NOME_EXECUTAVEL = "AutoCheckin.exe"
 
 # LINKS DO GITHUB
@@ -123,42 +123,44 @@ def realizar_atualizacao_auto():
     try:
         r = requests.get(URL_DOWNLOAD_EXE, stream=True)
         r.raise_for_status()
-        
-        nome_temp = "update_new.exe"
+
         base_dir = get_base_path()
+        nome_atual = os.path.basename(sys.executable)  # Ex: AutoCheckin.exe
+        nome_temp = "update_new.exe"
         caminho_temp = os.path.join(base_dir, nome_temp)
+        caminho_bat = os.path.join(base_dir, "update.bat")
 
         # Salva o novo exe na pasta do programa
-        with open(caminho_temp, 'wb') as f:
+        with open(caminho_temp, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
 
-        # Nome do exe atual (congelado pelo PyInstaller)
-        nome_atual = os.path.basename(sys.executable)  # normalmente AutoCheckin.exe
-
-        # Cria o .bat de update usando caminhos RELATIVOS
-        caminho_bat = os.path.join(base_dir, "update.bat")
         pid_atual = os.getpid()
 
+        # Script .BAT simplificado e mais robusto
         bat_script = rf"""@echo off
             cd /d "%~dp0"
 
-            echo Aguardando fechamento do processo atual...
-            timeout /t 2 /nobreak > NUL
-            taskkill /PID {pid_atual} /F > NUL 2>&1
+            echo Aguardando fechamento do programa atual...
+            REM Tenta matar o processo atual pelo PID (não tem problema se falhar)
+            taskkill /PID {pid_atual} /F >NUL 2>&1
 
-            :LOOP
-            del "{nome_atual}" > NUL 2>&1
+            :WAITOLD
+            REM Espera o executável sumir do disco
             if exist "{nome_atual}" (
-                timeout /t 1 /nobreak > NUL
-                goto LOOP
+                timeout /t 1 /nobreak >NUL
+                goto WAITOLD
             )
 
+            REM Renomeia o novo arquivo para o nome oficial
             ren "{nome_temp}" "{nome_atual}"
+
             echo Iniciando nova versao...
             start "" "{nome_atual}"
-            del "%~f0"
+
+            REM Não tenta se deletar, só sai
+            exit
         """
 
         with open(caminho_bat, "w", encoding="utf-8") as f:
@@ -172,6 +174,7 @@ def realizar_atualizacao_auto():
     except Exception as e:
         print(f"[ERRO UPDATE] {e}")
         input("Enter para continuar na versão atual...")
+
 
 
 # ===== FUNÇÕES DE SUPORTE E BOT =====
