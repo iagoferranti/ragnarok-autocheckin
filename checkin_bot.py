@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 from playwright.__main__ import main as playwright_installer
 
 # ===== CONFIGURAÇÕES =====
-VERSAO_ATUAL = "1.0"
+VERSAO_ATUAL = "1.1"
 NOME_EXECUTAVEL = "AutoCheckin.exe"
 
 URL_VERSION_TXT = "https://raw.githubusercontent.com/iagoferranti/ragnarok-autocheckin/refs/heads/main/version.txt"
@@ -30,6 +30,7 @@ LOGIN_URL = "https://ro.gnjoylatam.com/pt/event/decemberroulette"
 CHECKIN_URL = "https://ro.gnjoylatam.com/pt/event/decemberroulette"
 HEADLESS = False 
 WAIT_TIMEOUT_MS = 60000 
+
 
 # ===== SISTEMA DE ATUALIZAÇÃO (MODO AGRESSIVO) =====
 def realizar_atualizacao_auto():
