@@ -121,54 +121,54 @@ def verificar_atualizacao():
 def realizar_atualizacao_auto():
     print("[UPDATE] Baixando nova versão... Aguarde...")
     try:
+        # 1. Baixa o novo executável
         r = requests.get(URL_DOWNLOAD_EXE, stream=True)
-        r.raise_for_status()
-
-        base_dir = get_base_path()
-        nome_atual = os.path.basename(sys.executable)  # Ex: AutoCheckin.exe
         nome_temp = "update_new.exe"
-        caminho_temp = os.path.join(base_dir, nome_temp)
-        caminho_bat = os.path.join(base_dir, "update.bat")
-
-        # Salva o novo exe na pasta do programa
-        with open(caminho_temp, "wb") as f:
+        caminho_temp = os.path.join(get_base_path(), nome_temp)
+        
+        with open(caminho_temp, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-
-        pid_atual = os.getpid()
-
-        # Script .BAT simplificado e mais robusto
-        bat_script = rf"""@echo off
-            cd /d "%~dp0"
-
-            echo Aguardando fechamento do programa atual...
-            REM Tenta matar o processo atual pelo PID (não tem problema se falhar)
-            taskkill /PID {pid_atual} /F >NUL 2>&1
-
-            :WAITOLD
-            REM Espera o executável sumir do disco
-            if exist "{nome_atual}" (
-                timeout /t 1 /nobreak >NUL
-                goto WAITOLD
-            )
-
-            REM Renomeia o novo arquivo para o nome oficial
-            ren "{nome_temp}" "{nome_atual}"
-
-            echo Iniciando nova versao...
-            start "" "{nome_atual}"
-
-            REM Não tenta se deletar, só sai
-            exit
+                f.write(chunk)
+        
+        # 2. Prepara caminhos
+        nome_atual = os.path.basename(sys.executable)
+        pasta_base = get_base_path()
+        caminho_exe_atual = os.path.join(pasta_base, nome_atual)
+        caminho_bat = os.path.join(pasta_base, "update.bat")
+        
+        # 3. Script BAT Otimizado
+        # - start "" "caminho": O par de aspas vazio é importante para o comando start não confundir o caminho com o Título
+        # - (goto) 2>nul & del "%~f0": Truque para deletar o arquivo bat sem dar erro de "não encontrado"
+        bat_script = f"""
+        @echo off
+        timeout /t 2 /nobreak > NUL
+        
+        :LOOP
+        del "{caminho_exe_atual}"
+        if exist "{caminho_exe_atual}" (
+            timeout /t 1 /nobreak > NUL
+            goto LOOP
+        )
+        
+        ren "{nome_temp}" "{nome_atual}"
+        
+        cd /d "{pasta_base}"
+        start "" "{caminho_exe_atual}"
+        
+        (goto) 2>nul & del "%~f0"
         """
-
-        with open(caminho_bat, "w", encoding="utf-8") as f:
-            f.write(bat_script)
-
+        
+        with open(caminho_bat, "w") as f: f.write(bat_script)
+        
         print("[UPDATE] Reiniciando em 3 segundos...")
-        # Executa o .bat e encerra o processo atual
-        subprocess.Popen([caminho_bat], shell=True)
+        
+        # 4. LANÇAMENTO INDEPENDENTE (A Correção Principal)
+        # 0x00000010 é a flag CREATE_NEW_CONSOLE. 
+        # Isso cria uma janela preta separada para o BAT, garantindo que ele sobreviva à morte do Python.
+        CREATE_NEW_CONSOLE = 0x00000010
+        subprocess.Popen([caminho_bat], creationflags=CREATE_NEW_CONSOLE, shell=True)
+        
+        # 5. Mata o processo atual
         os._exit(0)
 
     except Exception as e:
