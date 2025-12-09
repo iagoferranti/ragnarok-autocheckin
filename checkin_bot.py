@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 from playwright.__main__ import main as playwright_installer
 
 # ===== CONFIGURAÇÕES GERAIS =====
-VERSAO_ATUAL = "1.3" 
+VERSAO_ATUAL = "1.4" 
 NOME_EXECUTAVEL = "AutoCheckin.exe"
 
 # LINKS DO GITHUB
