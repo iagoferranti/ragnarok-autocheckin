@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 from playwright.__main__ import main as playwright_installer
 
 # ===== CONFIGURAÇÕES GERAIS =====
-VERSAO_ATUAL = "1.1" 
+VERSAO_ATUAL = "1.3" 
 NOME_EXECUTAVEL = "AutoCheckin.exe"
 
 # LINKS DO GITHUB
@@ -122,48 +122,57 @@ def realizar_atualizacao_auto():
     print("[UPDATE] Baixando nova versão... Aguarde...")
     try:
         r = requests.get(URL_DOWNLOAD_EXE, stream=True)
-        nome_temp = "update_new.exe"
-        caminho_temp = os.path.join(get_base_path(), nome_temp)
+        r.raise_for_status()
         
+        nome_temp = "update_new.exe"
+        base_dir = get_base_path()
+        caminho_temp = os.path.join(base_dir, nome_temp)
+
+        # Salva o novo exe na pasta do programa
         with open(caminho_temp, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        # --- FIX DO RESTART ---
-        # Usa caminho absoluto para garantir que o 'start' ache o arquivo
-        nome_atual = os.path.basename(sys.executable)
-        caminho_exe_atual = os.path.join(get_base_path(), nome_atual)
-        caminho_bat = os.path.join(get_base_path(), "update.bat")
+                if chunk:
+                    f.write(chunk)
+
+        # Nome do exe atual (congelado pelo PyInstaller)
+        nome_atual = os.path.basename(sys.executable)  # normalmente AutoCheckin.exe
+
+        # Cria o .bat de update usando caminhos RELATIVOS
+        caminho_bat = os.path.join(base_dir, "update.bat")
         pid_atual = os.getpid()
 
-        # O script BAT agora navega para a pasta correta e usa caminhos completos
-        bat_script = f"""
-        @echo off
-        timeout /t 2 /nobreak > NUL
-        taskkill /PID {pid_atual} /F > NUL 2>&1
-        
-        :LOOP
-        del "{caminho_exe_atual}"
-        if exist "{caminho_exe_atual}" (
-            timeout /t 1 /nobreak > NUL
-            goto LOOP
-        )
-        
-        ren "{caminho_temp}" "{nome_atual}"
-        echo Iniciando nova versao...
-        start "" "{caminho_exe_atual}"
-        del "%~f0"
+        bat_script = rf"""@echo off
+            cd /d "%~dp0"
+
+            echo Aguardando fechamento do processo atual...
+            timeout /t 2 /nobreak > NUL
+            taskkill /PID {pid_atual} /F > NUL 2>&1
+
+            :LOOP
+            del "{nome_atual}" > NUL 2>&1
+            if exist "{nome_atual}" (
+                timeout /t 1 /nobreak > NUL
+                goto LOOP
+            )
+
+            ren "{nome_temp}" "{nome_atual}"
+            echo Iniciando nova versao...
+            start "" "{nome_atual}"
+            del "%~f0"
         """
-        
-        with open(caminho_bat, "w") as f: f.write(bat_script)
-        
+
+        with open(caminho_bat, "w", encoding="utf-8") as f:
+            f.write(bat_script)
+
         print("[UPDATE] Reiniciando em 3 segundos...")
+        # Executa o .bat e encerra o processo atual
         subprocess.Popen([caminho_bat], shell=True)
         os._exit(0)
 
     except Exception as e:
         print(f"[ERRO UPDATE] {e}")
         input("Enter para continuar na versão atual...")
+
 
 # ===== FUNÇÕES DE SUPORTE E BOT =====
 def verificar_licenca_online():
