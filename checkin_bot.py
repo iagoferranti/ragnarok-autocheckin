@@ -37,64 +37,89 @@ def obter_url_evento(browser_path):
     # 1. Tenta usar configuração salva (validade de 24h)
     if os.path.exists(arquivo_config):
         try:
-            with open(arquivo_config, "r") as f:
+            with open(arquivo_config, "r", encoding="utf-8") as f:
                 dados = json.load(f)
-                if time.time() - dados.get("timestamp", 0) < 86400: # 24 horas
+                if time.time() - dados.get("timestamp", 0) < 86400:  # 24 horas
                     print(f"[EVENTO] Usando link salvo: {dados['url']}")
-                    return dados['url']
-        except: 
+                    return dados["url"]
+        except:
             pass
 
-    print("\n[EVENTO] Acessando site oficial para descobrir link atual...")
+    print("\n[EVENTO] Buscando URL oficial...")
     nova_url = None
 
     # 2. Busca automática
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(executable_path=browser_path, headless=True)
-            page = browser.new_page()
-            
+            context = browser.new_context()
+            page = context.new_page()
+
             try:
-                print("   -> Entrando em gnjoylatam.com/pt ...")
+                print("   -> Entrando em https://www.gnjoylatam.com/pt ...")
                 page.goto("https://www.gnjoylatam.com/pt", timeout=30000)
-                
+
+                # URL antes de clicar
+                url_inicial = page.url
+
+                # Localiza o botão da Máquina PonPon
                 botao = page.locator("text=Máquina PonPon").first
+
                 if botao.is_visible():
                     print("   -> Botão 'Máquina PonPon' encontrado! Clicando...")
-                    with page.expect_navigation(timeout=10000):
-                        botao.click()
-                    
-                    nova_url = page.url
-                    print(f"   -> Link descoberto: {nova_url}")
+                    botao.click()
+
+                    # Dá um tempo para a nova aba carregar
+                    time.sleep(5)
+
+                    # Varre todas as abas/janelas abertas
+                    for pg in context.pages:
+                        url_pg = pg.url or ""
+                        # Critério pra identificar a página do evento
+                        if (
+                            "gnjoylatam.com" in url_pg
+                            and ("roulette" in url_pg or "/event/" in url_pg)
+                            and url_pg != url_inicial
+                        ):
+                            nova_url = url_pg
+                            print(f"   -> Link descoberto: {nova_url}")
+                            break
+
+                    # Se não achou em outra aba, tenta ver se a própria página mudou
+                    if not nova_url:
+                        url_atual = page.url or ""
+                        if url_atual != url_inicial and "gnjoylatam.com" in url_atual:
+                            nova_url = url_atual
+                            print(f"   -> Link descoberto (mesma aba): {nova_url}")
+
             except Exception as e:
                 print(f"   [!] Falha na busca automática: {e}")
             finally:
                 browser.close()
-    except: 
+    except:
         pass
 
     # 3. Fallback (Manual)
     if not nova_url or "gnjoy" not in nova_url:
         print("\n" + "="*50)
-        print("⚠️ NÃO FOI POSSÍVEL ACHAR O LINK AUTOMATICAMENTE")
-        print("1. Acesse: https://www.gnjoylatam.com/pt")
-        print("2. Clique no botão 'Máquina PonPon'")
-        print("3. Copie o link da página que abrir e cole abaixo.")
+        print("⚠️ LINK NÃO ENCONTRADO AUTOMATICAMENTE")
+        print("Cole o link da Máquina PonPon abaixo.")
         print("="*50)
         while True:
-            nova_url = input(">> Cole o Link do Evento aqui: ").strip()
-            if "http" in nova_url: 
+            nova_url = input(">> Link: ").strip()
+            if "http" in nova_url:
                 break
             print("Link inválido. Tente novamente.")
 
     # 4. Salva para não pedir de novo
     try:
-        with open(arquivo_config, "w") as f:
+        with open(arquivo_config, "w", encoding="utf-8") as f:
             json.dump({"url": nova_url, "timestamp": time.time()}, f)
-    except: 
+    except:
         pass
 
     return nova_url
+
 
 # ===== SISTEMA DE ATUALIZAÇÃO (CORRIGIDO PARA RESTART) =====
 def verificar_atualizacao():
