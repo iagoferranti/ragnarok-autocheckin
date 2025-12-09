@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 from playwright.__main__ import main as playwright_installer
 
 # ===== CONFIGURAÇÕES GERAIS =====
-VERSAO_ATUAL = "1.1"  # <--- ATUALIZADO PARA 1.1
+VERSAO_ATUAL = "1.2"  # <--- ATUALIZADO PARA 1.1
 NOME_EXECUTAVEL = "AutoCheckin.exe"
 
 # LINKS DO GITHUB (SEUS LINKS)
@@ -130,34 +130,82 @@ def verificar_licenca_online():
             return False
     except: return False
 
+# ===== SISTEMA DE ATUALIZAÇÃO (CORRIGIDO) =====
 def verificar_atualizacao():
-    if not getattr(sys, 'frozen', False): return
-    print(f"\n[UPDATE] Versão: {VERSAO_ATUAL}")
+    # Só roda atualização se for .exe compilado
+    if not getattr(sys, 'frozen', False):
+        return
+
+    print(f"\n[UPDATE] Versão instalada: {VERSAO_ATUAL}")
     try:
         r = requests.get(URL_VERSION_TXT)
         if r.status_code == 200:
-            remota = r.text.strip()
-            if remota != VERSAO_ATUAL:
-                print(f"🚨 NOVA VERSÃO: {remota}")
-                if input("Atualizar? (S/N): ").lower() == 's': realizar_atualizacao_auto()
-            else: print("[UPDATE] Sistema atualizado.")
-    except: pass
+            versao_remota = r.text.strip()
+            
+            if versao_remota != VERSAO_ATUAL:
+                print(f"🚨 NOVA VERSÃO DISPONÍVEL: {versao_remota}")
+                msg = input("Deseja atualizar agora? (S/N): ").lower()
+                if msg == 's':
+                    realizar_atualizacao_auto()
+                    # IMPORTANTE: Força o retorno para parar a execução aqui se falhar o exit
+                    return 
+            else:
+                print("[UPDATE] Seu sistema está atualizado.")
+    except Exception as e: # <--- Mudança: 'Exception' não captura SystemExit
+        print(f"[UPDATE] Erro ao buscar updates: {e}")
 
 def realizar_atualizacao_auto():
-    print("[UPDATE] Baixando...")
+    print("[UPDATE] Baixando nova versão... Aguarde...")
     try:
+        # 1. Baixa o novo .exe
         r = requests.get(URL_DOWNLOAD_EXE, stream=True)
         nome_temp = "update_new.exe"
-        with open(os.path.join(get_base_path(), nome_temp), 'wb') as f:
-            for chunk in r.iter_content(8192): f.write(chunk)
+        caminho_temp = os.path.join(get_base_path(), nome_temp)
         
+        with open(caminho_temp, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        # 2. Prepara o BAT
         nome_atual = os.path.basename(sys.executable)
-        bat_path = os.path.join(get_base_path(), "update.bat")
-        with open(bat_path, "w") as f:
-            f.write(f'@echo off\ntimeout /t 2 > NUL\ndel "{nome_atual}"\nren "{nome_temp}" "{nome_atual}"\nstart "" "{nome_atual}"\ndel "%~f0"')
-        subprocess.Popen([bat_path], shell=True)
-        sys.exit(0)
-    except Exception as e: print(f"[ERRO UPDATE] {e}")
+        caminho_bat = os.path.join(get_base_path(), "update.bat")
+        
+        # SCRIPT BAT BLINDADO:
+        # - Usa aspas em tudo para evitar erros com espaços
+        # - Faz um loop (:LOOP) tentando deletar o arquivo até conseguir
+        # - Inicia o novo programa em uma nova janela
+        bat_script = f"""
+        @echo off
+        echo Aguardando fechamento do programa...
+        timeout /t 2 /nobreak > NUL
+        
+        :LOOP
+        del "{nome_atual}"
+        if exist "{nome_atual}" (
+            echo Arquivo em uso. Tentando novamente...
+            timeout /t 1 /nobreak > NUL
+            goto LOOP
+        )
+        
+        ren "{nome_temp}" "{nome_atual}"
+        echo Iniciando nova versao...
+        start "" "{nome_atual}"
+        del "%~f0"
+        """
+        
+        with open(caminho_bat, "w") as f: f.write(bat_script)
+        
+        print("[UPDATE] Reiniciando aplicação em 3 segundos...")
+        
+        # 3. Executa o BAT e MATA o processo atual
+        subprocess.Popen([caminho_bat], shell=True)
+        
+        # Força bruta para fechar o Python imediatamente
+        os._exit(0) 
+
+    except Exception as e:
+        print(f"[ERRO] Falha crítica na atualização: {e}")
+        input("Enter para continuar na versão atual...")
 
 def encontrar_executavel_chrome():
     if not os.path.exists(pasta_navegadores): return None
