@@ -18,11 +18,10 @@ os.environ["PLAYWRIGHT_BROWSERS_PATH"] = pasta_navegadores
 from playwright.sync_api import sync_playwright
 from playwright.__main__ import main as playwright_installer
 
-# ===== CONFIGURAÇÕES GERAIS =====
-VERSAO_ATUAL = "1.5" 
+# ===== CONFIGURAÇÕES =====
+VERSAO_ATUAL = "1.5"
 NOME_EXECUTAVEL = "AutoCheckin.exe"
 
-# SEUS LINKS
 URL_VERSION_TXT = "https://raw.githubusercontent.com/iagoferranti/ragnarok-autocheckin/refs/heads/main/version.txt"
 URL_DOWNLOAD_EXE = "https://github.com/iagoferranti/ragnarok-autocheckin/releases/latest/download/AutoCheckin.exe"
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
@@ -30,74 +29,7 @@ URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af
 HEADLESS = False 
 WAIT_TIMEOUT_MS = 60000 
 
-# ===== NOVA FUNÇÃO: DESCOBRIR URL DO EVENTO =====
-def obter_url_evento(browser_path):
-    arquivo_config = os.path.join(get_base_path(), "config_evento.json")
-    
-    # 1. Tenta usar configuração salva (validade de 24h)
-    if os.path.exists(arquivo_config):
-        try:
-            with open(arquivo_config, "r") as f:
-                dados = json.load(f)
-                if time.time() - dados.get("timestamp", 0) < 86400: # 24 horas
-                    print(f"[EVENTO] Usando link salvo: {dados['url']}")
-                    return dados['url']
-        except: pass
-
-    print("\n[EVENTO] Acessando site oficial para descobrir link atual...")
-    nova_url = None
-
-    # 2. Busca automática
-    try:
-        with sync_playwright() as p:
-            # Abre navegador invisível rápido só pra buscar o link
-            browser = p.chromium.launch(executable_path=browser_path, headless=True)
-            page = browser.new_page()
-            
-            try:
-                print("   -> Entrando em gnjoylatam.com/pt ...")
-                page.goto("https://www.gnjoylatam.com/pt", timeout=30000)
-                
-                # Procura o botão pelo texto exato ou parcial
-                botao = page.locator("text=Máquina PonPon").first
-                
-                if botao.is_visible():
-                    print("   -> Botão 'Máquina PonPon' encontrado! Clicando...")
-                    
-                    # Clica e espera a URL mudar ou nova aba abrir
-                    with page.expect_navigation(timeout=10000):
-                        botao.click()
-                    
-                    nova_url = page.url
-                    print(f"   -> Link descoberto: {nova_url}")
-            except Exception as e:
-                print(f"   [!] Falha na busca automática: {e}")
-            finally:
-                browser.close()
-    except: pass
-
-    # 3. Fallback (Manual)
-    if not nova_url or "gnjoy" not in nova_url:
-        print("\n" + "="*50)
-        print("⚠️ NÃO FOI POSSÍVEL ACHAR O LINK AUTOMATICAMENTE")
-        print("1. Acesse: https://www.gnjoylatam.com/pt")
-        print("2. Clique no botão 'Máquina PonPon'")
-        print("3. Copie o link da página que abrir e cole abaixo.")
-        print("="*50)
-        while True:
-            nova_url = input(">> Cole o Link do Evento aqui: ").strip()
-            if "http" in nova_url: break
-            print("Link inválido. Tente novamente.")
-
-    # 4. Salva para não pedir de novo
-    try:
-        with open(arquivo_config, "w") as f:
-            json.dump({"url": nova_url, "timestamp": time.time()}, f)
-    except: pass
-
-    return nova_url
-
-# ===== SISTEMA DE ATUALIZAÇÃO (CORRIGIDO E BLINDADO) =====
+# ===== ATUALIZAÇÃO BLINDADA =====
 def verificar_atualizacao():
     if not getattr(sys, 'frozen', False): return False
     
@@ -111,7 +43,7 @@ def verificar_atualizacao():
                 msg = input("Deseja atualizar agora? (S/N): ").lower()
                 if msg == 's':
                     realizar_atualizacao_auto()
-                    return True # Retorna True para avisar o main() que vai fechar
+                    return True
             else:
                 print("[UPDATE] Sistema atualizado.")
     except: pass
@@ -120,6 +52,7 @@ def verificar_atualizacao():
 def realizar_atualizacao_auto():
     print("[UPDATE] Baixando nova versão... Aguarde...")
     try:
+        # 1. Baixa o novo executável
         r = requests.get(URL_DOWNLOAD_EXE, stream=True)
         nome_temp = "update_new.exe"
         pasta_base = get_base_path()
@@ -129,52 +62,104 @@ def realizar_atualizacao_auto():
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
         
-        # --- FIX DEFINITIVO DO RESTART ---
+        # 2. Configura caminhos
         nome_atual = os.path.basename(sys.executable)
         caminho_exe_atual = os.path.join(pasta_base, nome_atual)
         caminho_bat = os.path.join(pasta_base, "update.bat")
-        
-        # Script BAT Otimizado:
-        # 1. Espera 2s
-        # 2. Loop de deleção (tenta até conseguir)
-        # 3. Renomeia
-        # 4. Entra na pasta (cd /d) e abre o novo
+        pid_atual = os.getpid()
+
+        # 3. Script BAT Assassino (Melhorado)
+        # O comando 'start' agora usa título vazio "" para garantir compatibilidade
         bat_script = f"""
         @echo off
+        title Atualizador Ragnarok
+        echo Aguardando fechamento do programa...
         timeout /t 2 /nobreak > NUL
         
+        :: Garante que o Python morreu
+        taskkill /PID {pid_atual} /F > NUL 2>&1
+        
         :LOOP
-        del "{caminho_exe_atual}"
+        del "{caminho_exe_atual}" > NUL 2>&1
         if exist "{caminho_exe_atual}" (
+            echo Arquivo em uso. Tentando novamente...
             timeout /t 1 /nobreak > NUL
             goto LOOP
         )
         
         ren "{nome_temp}" "{nome_atual}"
         
+        echo Iniciando nova versao...
         cd /d "{pasta_base}"
         start "" "{caminho_exe_atual}"
         
-        (goto) 2>nul & del "%~f0"
+        :: Autodestruição silenciosa
+        start /b "" cmd /c del "%~f0"&exit /b
         """
         
         with open(caminho_bat, "w") as f: f.write(bat_script)
         
         print("[UPDATE] Reiniciando em 3 segundos...")
+        print("Uma nova janela preta vai abrir para finalizar.")
         
-        # CRUCIAL: Abre o BAT em uma janela separada (CREATE_NEW_CONSOLE)
-        # Isso impede que o BAT morra junto com o Python
-        CREATE_NEW_CONSOLE = 0x00000010
-        subprocess.Popen([caminho_bat], creationflags=CREATE_NEW_CONSOLE, shell=True)
+        # 4. O PULO DO GATO:
+        # Usamos 'start' do Windows para lançar o BAT em uma janela TOTALMENTE NOVA.
+        # Isso desconecta o BAT do seu PowerShell atual.
+        subprocess.Popen(f'start "Updater" "{caminho_bat}"', shell=True)
         
-        # Mata o processo atual imediatamente
+        # Mata o Python na hora
         os._exit(0)
 
     except Exception as e:
         print(f"[ERRO UPDATE] {e}")
         input("Enter para continuar na versão atual...")
 
-# ===== FUNÇÕES DE SUPORTE (Licença e Instalação) =====
+# ===== OUTRAS FUNÇÕES =====
+def obter_url_evento(browser_path):
+    arquivo_config = os.path.join(get_base_path(), "config_evento.json")
+    if os.path.exists(arquivo_config):
+        try:
+            with open(arquivo_config, "r") as f:
+                dados = json.load(f)
+                if time.time() - dados.get("timestamp", 0) < 86400:
+                    print(f"[EVENTO] Usando link salvo: {dados['url']}")
+                    return dados['url']
+        except: pass
+
+    print("\n[EVENTO] Buscando URL oficial...")
+    nova_url = None
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(executable_path=browser_path, headless=True)
+            page = browser.new_page()
+            try:
+                page.goto("https://www.gnjoylatam.com/pt", timeout=30000)
+                botao = page.locator("text=Máquina PonPon").first
+                if botao.is_visible():
+                    print("[EVENTO] Botão encontrado! Capturando link...")
+                    with page.expect_navigation(timeout=10000):
+                        botao.click()
+                    nova_url = page.url
+                    print(f"[EVENTO] URL descoberta: {nova_url}")
+            except: pass
+            finally: browser.close()
+    except: pass
+
+    if not nova_url or "gnjoy" not in nova_url:
+        print("\n" + "="*50)
+        print("⚠️ LINK NÃO ENCONTRADO AUTOMATICAMENTE")
+        print("Cole o link da Máquina PonPon abaixo.")
+        print("="*50)
+        while True:
+            nova_url = input(">> Link: ").strip()
+            if "http" in nova_url: break
+    
+    try:
+        with open(arquivo_config, "w") as f:
+            json.dump({"url": nova_url, "timestamp": time.time()}, f)
+    except: pass
+    return nova_url
+
 def verificar_licenca_online():
     print("\n[SEGURANÇA] Verificando licença...")
     arquivo_licenca = os.path.join(get_base_path(), "licenca.txt")
@@ -205,8 +190,7 @@ def encontrar_executavel_chrome():
     if not os.path.exists(pasta_navegadores): return None
     for root, dirs, files in os.walk(pasta_navegadores):
         for file in files:
-            if file == "chrome.exe" or file == "headless_shell.exe":
-                return os.path.join(root, file)
+            if file in ["chrome.exe", "headless_shell.exe"]: return os.path.join(root, file)
     return None
 
 def verificar_e_instalar_navegador():
@@ -234,27 +218,12 @@ def setup_contas():
     except: pass
     return novas
 
-# ===== LÓGICA DO BOT =====
 def digitar_humano(page, seletor, texto):
     try:
         page.bring_to_front()
         page.focus(seletor)
         page.type(seletor, texto, delay=random.randint(50, 150))
     except: page.fill(seletor, texto)
-
-def tentar_clicar_checkbox(page):
-    try:
-        if page.locator("iframe[src*='turnstile'], iframe[src*='challenges']").count() > 0:
-            iframe = page.frame_locator("iframe[src*='turnstile'], iframe[src*='challenges']").first
-            if iframe.locator("input[type='checkbox']").count() > 0:
-                iframe.locator("input[type='checkbox']").first.click(force=True)
-                return True
-            box = page.locator("iframe[src*='turnstile'], iframe[src*='challenges']").first.bounding_box()
-            if box:
-                page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                return True
-    except: pass
-    return False
 
 def verificar_se_precisa_clique(page):
     try:
@@ -277,20 +246,16 @@ def aguardar_validacao_ou_refresh(page, tentativa_atual):
     inicio = time.time()
     while time.time() - inicio < 20:
         if page.locator("text=Sucesso").count() > 0 or page.locator("text=concluída").count() > 0:
-            print("      ✅ Sucesso Automático!")
-            time.sleep(1); return "OK"
-        
+            print("      ✅ Sucesso Automático!"); time.sleep(1); return "OK"
         if verificar_se_precisa_clique(page):
             if tentativa_atual < 2:
                 print("      ⚠️ Checkbox pede clique. Forçando F5..."); return "REFRESH"
             else:
                 print("      ⚠️ Clicando forçado..."); clicar_checkbox_forca_bruta(page); time.sleep(2)
-
         if page.locator("text=Verificando segurança").count() > 0 or page.locator("text=Just a moment").count() > 0:
             if time.time() - inicio > 15 and tentativa_atual < 2:
                 print("      ⚠️ Travou. Forçando F5..."); return "REFRESH"
             print("      ⏳ Processando..."); time.sleep(2); continue
-            
         if time.time() - inicio > 5:
             print("      ❓ Texto sumiu. Seguindo..."); return "OK"
     return "TIMEOUT"
@@ -309,7 +274,6 @@ def do_checkin_for_account(p, email: str, password: str, browser_path: str, url_
     context = browser.new_context(viewport={"width": 1366, "height": 768})
     page = context.new_page()
     page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    
     page.on("dialog", lambda dialog: (print(f"   [ALERTA DO SITE] {dialog.message}"), dialog.accept()))
 
     try:
@@ -355,8 +319,7 @@ def do_checkin_for_account(p, email: str, password: str, browser_path: str, url_
                     
                     if page.locator('a.page_login__g41B0:has-text("Logout")').count() > 0:
                         login_sucesso = True; break
-                    else:
-                        print("   [!] Login não confirmado (Senha errada ou Evento expirado).")
+                    else: print("   [!] Login não confirmado.")
             except: pass
 
         if not login_sucesso:
@@ -385,14 +348,9 @@ def do_checkin_for_account(p, email: str, password: str, browser_path: str, url_
 
 def main():
     try:
-        # 1. Verifica licença
-        if not verificar_licenca_online():
-            input("Enter para sair..."); return
-        
-        # 2. Verifica update (e fecha se atualizar)
+        if not verificar_licenca_online(): input("Enter para sair..."); return
         if verificar_atualizacao(): return 
 
-        # 3. Fluxo normal
         browser_path = verificar_e_instalar_navegador()
         url_evento = obter_url_evento(browser_path)
         contas = setup_contas()
