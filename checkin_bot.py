@@ -30,7 +30,7 @@ URL_VERSION_TXT = "https://raw.githubusercontent.com/iagoferranti/ragnarok-autoc
 URL_DOWNLOAD_EXE = "https://github.com/iagoferranti/ragnarok-autocheckin/releases/latest/download/AutoCheckin.exe"
 
 # 3. LINK DA LICENÇA)
-URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/f175f92f9175bba56a6376b8cb7e984928ed75e5/emails.json"
+URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
 
 # ===== CONFIGURAÇÕES DO BOT =====
 LOGIN_URL = "https://ro.gnjoylatam.com/pt/event/decemberroulette"
