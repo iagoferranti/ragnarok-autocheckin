@@ -1,0 +1,8 @@
+__pycache__/
+build/
+dist/
+*.spec
+navegadores/
+accounts.json
+licenca.txt
+user_license.key
