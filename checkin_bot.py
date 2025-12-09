@@ -22,7 +22,7 @@ from playwright.__main__ import main as playwright_installer
 VERSAO_ATUAL = "1.5" 
 NOME_EXECUTAVEL = "AutoCheckin.exe"
 
-# LINKS DO GITHUB
+# SEUS LINKS
 URL_VERSION_TXT = "https://raw.githubusercontent.com/iagoferranti/ragnarok-autocheckin/refs/heads/main/version.txt"
 URL_DOWNLOAD_EXE = "https://github.com/iagoferranti/ragnarok-autocheckin/releases/latest/download/AutoCheckin.exe"
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
@@ -59,7 +59,6 @@ def obter_url_evento(browser_path):
                 page.goto("https://www.gnjoylatam.com/pt", timeout=30000)
                 
                 # Procura o botão pelo texto exato ou parcial
-                # O seletor 'text=' é inteligente e clica no elemento visível
                 botao = page.locator("text=Máquina PonPon").first
                 
                 if botao.is_visible():
@@ -98,7 +97,7 @@ def obter_url_evento(browser_path):
 
     return nova_url
 
-# ===== SISTEMA DE ATUALIZAÇÃO (CORRIGIDO PARA RESTART) =====
+# ===== SISTEMA DE ATUALIZAÇÃO (CORRIGIDO E BLINDADO) =====
 def verificar_atualizacao():
     if not getattr(sys, 'frozen', False): return False
     
@@ -121,24 +120,25 @@ def verificar_atualizacao():
 def realizar_atualizacao_auto():
     print("[UPDATE] Baixando nova versão... Aguarde...")
     try:
-        # 1. Baixa o novo executável
         r = requests.get(URL_DOWNLOAD_EXE, stream=True)
         nome_temp = "update_new.exe"
-        caminho_temp = os.path.join(get_base_path(), nome_temp)
+        pasta_base = get_base_path()
+        caminho_temp = os.path.join(pasta_base, nome_temp)
         
         with open(caminho_temp, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
         
-        # 2. Prepara caminhos
+        # --- FIX DEFINITIVO DO RESTART ---
         nome_atual = os.path.basename(sys.executable)
-        pasta_base = get_base_path()
         caminho_exe_atual = os.path.join(pasta_base, nome_atual)
         caminho_bat = os.path.join(pasta_base, "update.bat")
         
-        # 3. Script BAT Otimizado
-        # - start "" "caminho": O par de aspas vazio é importante para o comando start não confundir o caminho com o Título
-        # - (goto) 2>nul & del "%~f0": Truque para deletar o arquivo bat sem dar erro de "não encontrado"
+        # Script BAT Otimizado:
+        # 1. Espera 2s
+        # 2. Loop de deleção (tenta até conseguir)
+        # 3. Renomeia
+        # 4. Entra na pasta (cd /d) e abre o novo
         bat_script = f"""
         @echo off
         timeout /t 2 /nobreak > NUL
@@ -162,22 +162,19 @@ def realizar_atualizacao_auto():
         
         print("[UPDATE] Reiniciando em 3 segundos...")
         
-        # 4. LANÇAMENTO INDEPENDENTE (A Correção Principal)
-        # 0x00000010 é a flag CREATE_NEW_CONSOLE. 
-        # Isso cria uma janela preta separada para o BAT, garantindo que ele sobreviva à morte do Python.
+        # CRUCIAL: Abre o BAT em uma janela separada (CREATE_NEW_CONSOLE)
+        # Isso impede que o BAT morra junto com o Python
         CREATE_NEW_CONSOLE = 0x00000010
         subprocess.Popen([caminho_bat], creationflags=CREATE_NEW_CONSOLE, shell=True)
         
-        # 5. Mata o processo atual
+        # Mata o processo atual imediatamente
         os._exit(0)
 
     except Exception as e:
         print(f"[ERRO UPDATE] {e}")
         input("Enter para continuar na versão atual...")
 
-
-
-# ===== FUNÇÕES DE SUPORTE E BOT =====
+# ===== FUNÇÕES DE SUPORTE (Licença e Instalação) =====
 def verificar_licenca_online():
     print("\n[SEGURANÇA] Verificando licença...")
     arquivo_licenca = os.path.join(get_base_path(), "licenca.txt")
@@ -237,7 +234,7 @@ def setup_contas():
     except: pass
     return novas
 
-# Funções de interação
+# ===== LÓGICA DO BOT =====
 def digitar_humano(page, seletor, texto):
     try:
         page.bring_to_front()
@@ -280,16 +277,20 @@ def aguardar_validacao_ou_refresh(page, tentativa_atual):
     inicio = time.time()
     while time.time() - inicio < 20:
         if page.locator("text=Sucesso").count() > 0 or page.locator("text=concluída").count() > 0:
-            print("      ✅ Sucesso Automático!"); time.sleep(1); return "OK"
+            print("      ✅ Sucesso Automático!")
+            time.sleep(1); return "OK"
+        
         if verificar_se_precisa_clique(page):
             if tentativa_atual < 2:
                 print("      ⚠️ Checkbox pede clique. Forçando F5..."); return "REFRESH"
             else:
                 print("      ⚠️ Clicando forçado..."); clicar_checkbox_forca_bruta(page); time.sleep(2)
+
         if page.locator("text=Verificando segurança").count() > 0 or page.locator("text=Just a moment").count() > 0:
             if time.time() - inicio > 15 and tentativa_atual < 2:
                 print("      ⚠️ Travou. Forçando F5..."); return "REFRESH"
             print("      ⏳ Processando..."); time.sleep(2); continue
+            
         if time.time() - inicio > 5:
             print("      ❓ Texto sumiu. Seguindo..."); return "OK"
     return "TIMEOUT"
@@ -309,7 +310,6 @@ def do_checkin_for_account(p, email: str, password: str, browser_path: str, url_
     page = context.new_page()
     page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     
-    # === DETECTOR DE POPUP "NÃO É PERÍODO DO EVENTO" ===
     page.on("dialog", lambda dialog: (print(f"   [ALERTA DO SITE] {dialog.message}"), dialog.accept()))
 
     try:
@@ -350,7 +350,6 @@ def do_checkin_for_account(p, email: str, password: str, browser_path: str, url_
                     print("   -> Enviando...")
                     page.press("#password", "Enter"); time.sleep(3)
                     
-                    # Espera para ver se logou ou se deu alerta
                     try: page.wait_for_url("**roulette**", timeout=10000)
                     except: pass
                     
@@ -386,16 +385,16 @@ def do_checkin_for_account(p, email: str, password: str, browser_path: str, url_
 
 def main():
     try:
-        if not verificar_licenca_online(): input("Enter para sair..."); return
+        # 1. Verifica licença
+        if not verificar_licenca_online():
+            input("Enter para sair..."); return
         
-        # Se atualizou, encerra aqui
+        # 2. Verifica update (e fecha se atualizar)
         if verificar_atualizacao(): return 
 
+        # 3. Fluxo normal
         browser_path = verificar_e_instalar_navegador()
-        
-        # === DESCOBERTA DE URL ===
         url_evento = obter_url_evento(browser_path)
-        
         contas = setup_contas()
         if not contas: return
 
