@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 from playwright.__main__ import main as playwright_installer
 
 # ===== CONFIGURAÇÕES GERAIS =====
-VERSAO_ATUAL = "1.6" 
+VERSAO_ATUAL = "1.0" 
 NOME_EXECUTAVEL = "AutoCheckin.exe"
 
 # LINKS DO GITHUB
@@ -131,37 +131,43 @@ def realizar_atualizacao_auto():
                 f.write(chunk)
         
         nome_atual = os.path.basename(sys.executable)
-        caminho_exe_atual = os.path.join(pasta_base, nome_atual)
         caminho_bat = os.path.join(pasta_base, "update.bat")
         pid_atual = os.getpid()
 
-        # O 'textwrap.dedent' remove a indentação à esquerda para o BAT não quebrar
+        # --- FIX DE ACENTOS E ESPAÇOS ---
+        # 1. chcp 65001: Força o CMD a entender UTF-8 (acentos)
+        # 2. "%~dp0": Significa "A pasta onde este arquivo .bat está"
+        # Não escrevemos mais a pasta "Diário" no código, usamos %~dp0
         bat_script = textwrap.dedent(f"""
             @echo off
+            chcp 65001 >NUL
+            cd /d "%~dp0"
+            
             title Atualizador Ragnarok
             timeout /t 2 /nobreak > NUL
             taskkill /PID {pid_atual} /F > NUL 2>&1
             
             :LOOP
-            del "{caminho_exe_atual}" > NUL 2>&1
-            if exist "{caminho_exe_atual}" (
+            del "{nome_atual}" >NUL 2>&1
+            if exist "{nome_atual}" (
                 timeout /t 1 /nobreak > NUL
                 goto LOOP
             )
             
             ren "{nome_temp}" "{nome_atual}"
             
-            cd /d "{pasta_base}"
-            start "" "{caminho_exe_atual}"
+            echo Iniciando nova versao...
+            start "" "{nome_atual}"
             
             start /b "" cmd /c del "%~f0"&exit /b
         """)
         
-        with open(caminho_bat, "w") as f: f.write(bat_script)
+        # Importante: encoding="utf-8" para garantir que caracteres especiais não quebrem
+        with open(caminho_bat, "w", encoding="utf-8") as f: 
+            f.write(bat_script)
         
         print("[UPDATE] Reiniciando em 3 segundos...")
         
-        # Cria uma nova janela de console para o BAT (Desanexa do Python atual)
         CREATE_NEW_CONSOLE = 0x00000010
         subprocess.Popen([caminho_bat], creationflags=CREATE_NEW_CONSOLE, shell=True)
         
