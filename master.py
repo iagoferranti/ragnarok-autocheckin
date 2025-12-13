@@ -406,10 +406,7 @@ def main():
 
         elif opcao == '2':
             limpar_tela()
-            if not os.path.exists(ARQUIVO_PRINCIPAL):
-                print(f"{Cores.AMARELO}⚠️ Arquivo '{ARQUIVO_PRINCIPAL}' não encontrado!{Cores.RESET}")
-                input("\nEnter para voltar...")
-                continue
+            # Removemos a checagem porque o próprio bot agora sabe criar o arquivo!
             try: checkin_bot_v2.executar()
             except Exception as e: print(f"Erro: {e}"); input()
 

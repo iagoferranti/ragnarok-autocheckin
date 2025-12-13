@@ -12,9 +12,9 @@ import shutil
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
-os.system('') # Enable CMD colors
+os.system('') # Cores CMD
 
-# --- STYLE CLASS ---
+# --- CLASSE DE ESTILO ---
 class Cores:
     RESET = '\033[0m'
     VERDE = '\033[92m'
@@ -24,21 +24,19 @@ class Cores:
     CINZA = '\033[90m'
     NEGRITO = '\033[1m'
 
-# ===== SETTINGS =====
+# ===== CONFIGURAÇÕES =====
 ARQUIVO_HISTORICO = "historico_diario.json"
 ARQUIVO_CONFIG = "config.json"
+ARQUIVO_CONTAS = "accounts.json"
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
 
 LOGS_SESSAO = []
 
-# --- CONFIG MANAGER (PASSIVE) ---
+# --- CONFIG MANAGER (PASSIVO) ---
 def carregar_config():
     padrao = {"headless": False, "telegram_token": "", "telegram_chat_id": ""}
-    
-    # IMPROVEMENT: PASSIVE MODE - Does not create the file, leaves it to the Wizard (master.py)
     if not os.path.exists(ARQUIVO_CONFIG): 
         return padrao 
-
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
             user = json.load(f)
@@ -59,7 +57,7 @@ def enviar_telegram(mensagem):
         requests.post(url, data=data, timeout=5)
     except: pass
 
-# --- UTILITIES ---
+# --- UTILITÁRIOS ---
 def get_base_path():
     if getattr(sys, 'frozen', False): return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
@@ -73,7 +71,6 @@ def registrar_log(email, status, obs=""):
 
 def salvar_arquivo_log():
     try:
-        # IMPROVEMENT: ORGANIZED LOGS - Creates 'logs' folder
         base_dir = get_base_path()
         logs_dir = os.path.join(base_dir, "logs")
         if not os.path.exists(logs_dir):
@@ -82,18 +79,18 @@ def salvar_arquivo_log():
         data_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         nome_arq = f"log_execucao_{data_str}.txt"
         
-        # Saves inside logs folder
         caminho = os.path.join(logs_dir, nome_arq)
         with open(caminho, "w", encoding="utf-8") as f: 
             f.write("\n".join(LOGS_SESSAO))
     except: pass
 
-# --- SAFE SAVE JSON ---
+# --- JSON HELPERS ---
 def carregar_json_seguro(caminho):
-    if not os.path.exists(caminho): return {}
+    """Retorna uma lista vazia se falhar ou não existir"""
+    if not os.path.exists(caminho): return []
     try:
         with open(caminho, "r", encoding="utf-8") as f: return json.load(f)
-    except: return {}
+    except: return []
 
 def salvar_json_seguro(caminho, dados):
     try:
@@ -104,71 +101,107 @@ def salvar_json_seguro(caminho, dados):
 def carregar_historico_hoje():
     hoje = datetime.datetime.now().strftime("%Y-%m-%d")
     dados = carregar_json_seguro(ARQUIVO_HISTORICO)
+    
+    # CORREÇÃO DO ERRO: Se retornar lista (padrão de erro ou arquivo vazio), converte para dict
+    if isinstance(dados, list): 
+        dados = {}
+    
     if dados.get("data") == hoje: return set(dados.get("contas", []))
     return set()
 
 def adicionar_ao_historico(email):
     hoje = datetime.datetime.now().strftime("%Y-%m-%d")
     dados = carregar_json_seguro(ARQUIVO_HISTORICO)
+    
+    # CORREÇÃO: Garante que é dicionário antes de manipular
+    if isinstance(dados, list):
+        dados = {"data": hoje, "contas": []}
+        
     if dados.get("data") != hoje: dados = {"data": hoje, "contas": []}
+    
     if email not in dados["contas"]:
         dados["contas"].append(email)
         salvar_json_seguro(ARQUIVO_HISTORICO, dados)
 
-# --- LICENSE ---
+# --- LICENÇA ---
 def verificar_licenca_online(permissao_necessaria="all"):
-    """
-    Checks if email has necessary permission.
-    """
     try:
         from master import verificar_licenca_online as v
         return v(permissao_necessaria)
-    except:
-        # Local fallback if running isolated
-        return True
+    except: return True
+
+# --- INTERFACE DE CRIAÇÃO DE CONTAS ---
+def criar_contas_interativo(path):
+    print(f"\n{Cores.AMARELO}⚠️  Arquivo '{ARQUIVO_CONTAS}' não encontrado!{Cores.RESET}")
+    if input("   >> Deseja cadastrar contas agora? (S/N): ").lower() != 's':
+        return []
+
+    contas = []
+    try:
+        qtd = int(input("\nQuantas contas deseja adicionar? : "))
+    except: 
+        print("Quantidade inválida.")
+        return []
+
+    print("\nDigite os dados das contas (Pressione Enter após cada campo):")
+    for i in range(qtd):
+        print(f"\n{Cores.NEGRITO}--- CONTA {i+1} ---{Cores.RESET}")
+        email = input("   E-mail: ").strip()
+        senha = input("   Senha:  ").strip()
+        
+        if email and senha:
+            contas.append({"email": email, "password": senha})
+        else:
+            print(f"{Cores.VERMELHO}   Dados inválidos. Pulando...{Cores.RESET}")
+
+    if contas:
+        salvar_json_seguro(path, contas)
+        print(f"\n{Cores.VERDE}✅ {len(contas)} contas salvas com sucesso!{Cores.RESET}")
+        time.sleep(1)
+    
+    return contas
 
 def setup_contas():
-    path = os.path.join(get_base_path(), "accounts.json")
-    return carregar_json_seguro(path)
+    path = os.path.join(get_base_path(), ARQUIVO_CONTAS)
+    contas = carregar_json_seguro(path)
+    
+    # SE NÃO TIVER CONTAS, CHAMA O CRIADOR
+    if not contas:
+        contas = criar_contas_interativo(path)
+        
+    return contas
 
-# --- SMART NAVIGATION ---
+# --- NAVEGAÇÃO INTELIGENTE ---
 def descobrir_url_evento(page):
     path = os.path.join(get_base_path(), "config_evento.json")
     
-    # 1. Try to use 24h Cache
     if os.path.exists(path):
         try:
             with open(path, "r") as f:
                 d = json.load(f)
-                if time.time() - d.get("ts", 0) < 86400: 
-                    return d['url']
+                if time.time() - d.get("ts", 0) < 86400: return d['url']
         except: pass
         
     print("Buscando URL do evento atual...")
     url_encontrada = None
     
-    # 2. Try to discover via Home Page (Safe Method)
     try:
         page.get("https://www.gnjoylatam.com/pt")
-        # Search for button with flexible text
         btn = page.wait.ele_displayed('text=Máquina PonPon', timeout=15)
-        if not btn:
-             btn = page.wait.ele_displayed('text:PonPon', timeout=5)
+        if not btn: btn = page.wait.ele_displayed('text:PonPon', timeout=5)
              
         if btn:
             btn.click()
             time.sleep(5) 
             nova = page.latest_tab 
             url_encontrada = nova.url
-            nova.close() # Close new tab to avoid clutter
+            nova.close() 
     except: pass
     
-    # 3. Fallback: Ask user if not found automatically
     if not url_encontrada:
         print(f"{Cores.AMARELO}⚠️ Não foi possível detectar o evento automaticamente.{Cores.RESET}")
         url_encontrada = input("Cole o link do evento (ex: .../decemberroulette): ").strip()
 
-    # 4. Save result (Automatic or Manual) to cache
     if url_encontrada:
         try:
             with open(path, "w") as f: 
@@ -187,8 +220,6 @@ def processar_roleta(page):
     premio_ganho = None
     try:
         page.scroll.to_bottom()
-        
-        # Close "event ended" alerts if they appear
         if page.handle_alert(accept=True): pass
         
         ele_count = page.wait.ele_displayed('.styles_attempts_count__iHKXy', timeout=5)
@@ -222,40 +253,26 @@ def processar_roleta(page):
     except: pass
     return premio_ganho
 
-# --- CLOUDFLARE BYPASS LOGIC (V60 - Real Visibility) ---
+# --- LÓGICA DE BYPASS V60 ---
 def vencer_cloudflare_login(page):
-    time.sleep(5)
-    
-    # 1. CHECK FOR REAL SUCCESS (VISIBLE)
+    time.sleep(3)
     sucesso_visivel = False
     
-    # Check text
     ele_texto = page.ele('text:Verificação de segurança para acesso concluída')
-    if ele_texto and ele_texto.states.is_displayed:
-        sucesso_visivel = True
+    if ele_texto and ele_texto.states.is_displayed: sucesso_visivel = True
         
-    # Check class
     if not sucesso_visivel:
         ele_classe = page.ele('.page_success__gilOx')
-        if ele_classe and ele_classe.states.is_displayed:
-            sucesso_visivel = True
+        if ele_classe and ele_classe.states.is_displayed: sucesso_visivel = True
 
-    if sucesso_visivel:
-        # If already green and visible, do nothing
-        return
+    if sucesso_visivel: return
 
-    # 2. IF NOT VISIBLE, IT IS PENDING (OR GHOST) -> APPLY MANEUVER
-    # Ensure focus
     try: 
-        if page.ele('#email'):
-            page.ele('#email').click()
-        else:
-            page.ele('tag:body').click()
+        if page.ele('#email'): page.ele('#email').click()
+        else: page.ele('tag:body').click()
     except: pass
         
     time.sleep(0.5)
-
-    # Golden Sequence: 4x Shift+Tab + Space
     for _ in range(4):
         page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
         time.sleep(0.1)
@@ -282,7 +299,6 @@ def processar(page, conta, url):
             
         page.wait.url_change('login.gnjoylatam.com', timeout=15)
         
-        # --- APPLIES NEW CLOUDFLARE LOGIC ---
         vencer_cloudflare_login(page)
             
         page.ele('#email').input(email)
@@ -327,19 +343,26 @@ def main():
         return
     print(f"\n{Cores.CIANO}>>> AUTO FARM PREMIUM{Cores.RESET}")
     
+    # 1. SETUP DE CONTAS (AGORA VEM ANTES DO BROWSER)
+    contas = setup_contas()
+    
+    if not contas:
+        print(f"{Cores.AMARELO}Nenhuma conta configurada. Encerrando.{Cores.RESET}")
+        return # Sai antes de abrir o navegador
+
+    # 2. INICIALIZA BROWSER (SÓ DEPOIS DE TER CONTAS)
     co = ChromiumOptions()
     co.set_argument('--force-device-scale-factor=0.75')
-    
     if CONF.get("headless", False):
         print(f"{Cores.AMARELO}Modo Invisível Ativo.{Cores.RESET}")
         co.headless(True)
         
     page = ChromiumPage(addr_or_opts=co)
     
+    # 3. BUSCA URL
     url = descobrir_url_evento(page)
-    contas = setup_contas()
-    ja_foi = carregar_historico_hoje()
     
+    ja_foi = carregar_historico_hoje()
     print(f"Total Contas: {len(contas)} | Já feitas hoje: {len(ja_foi)}")
     
     count_sucesso = 0
