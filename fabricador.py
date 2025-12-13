@@ -197,97 +197,150 @@ def vencer_cloudflare(page, checar_cookies=True):
         log_sistema("Aguardando validação...")
         time.sleep(5)
 
-# --- API E-MAIL INTELIGENTE ---
-def testar_acesso_conta(token):
-    try:
-        r = requests.get(f"https://api.mail.tm/me", headers={"Authorization": f"Bearer {token}"}, timeout=5)
-        return r.status_code == 200
-    except: return False
+# ==============================================================================
+# SISTEMA DE PROVEDORES DE E-MAIL (MULTI-PROVIDER)
+# ==============================================================================
 
-def gerar_email_premium(blacklist_dominios=[]):
-    log_info("Gerando identidade na API Mail.tm...")
-    tag = CONF.get("tag_email", "rag")
-    nomes_lista = ['jose', 'junior', 'joao', 'carlos', 'ricardo', 'lucas', 'marcos']
-    
-    tentativas = 0
-    while tentativas < 10:
+class EmailSession:
+    def __init__(self):
+        self.email = None
+        self.senha_api = "Senha123" # Usado no MailTM
+        self.token = None # Usado no MailTM
+        self.login_1sec = None # Usado no 1secmail
+        self.domain_1sec = None # Usado no 1secmail
+        self.provider_name = ""
+        self.primeiro_nome = "Jose"
+
+class Provider1SecMail:
+    """Provedor 1: 1secmail (Muito rápido, sem registro)"""
+    def gerar(self):
+        obj = EmailSession()
+        obj.provider_name = "1secmail"
+        tag = CONF.get("tag_email", "rag")
+        nomes_lista = ['jose', 'junior', 'joao', 'carlos', 'ricardo', 'lucas', 'marcos']
+        
         try:
-            resp = requests.get(f"https://api.mail.tm/domains", timeout=10)
-            if resp.status_code == 429:
-                log_aviso("API cheia. Aguardando...")
-                time.sleep(5); tentativas += 1; continue
+            # Tenta pegar lista de domínios
+            r = requests.get("https://www.1secmail.com/api/v1/?action=getDomainList", timeout=5)
+            if r.status_code == 200:
+                domains = r.json()
+            else:
+                domains = ['1secmail.com', '1secmail.org', '1secmail.net'] # Fallback
             
-            # FILTRO DE DOMÍNIOS RUINS
-            todos_dominios = resp.json()['hydra:member']
-            # Pega domínios que NÃO estão na blacklist
-            dominios_validos = [d for d in todos_dominios if d['domain'] not in blacklist_dominios]
+            obj.domain_1sec = random.choice(domains)
+            obj.primeiro_nome = random.choice(nomes_lista)
             
-            if not dominios_validos:
-                log_erro("Todos os domínios disponíveis estão na blacklist. Tentando resetar...")
-                dominios_validos = todos_dominios # Reseta se acabar as opções
+            sufixo = ''.join(random.choices(string.digits, k=4))
+            obj.login_1sec = f"{obj.primeiro_nome}{tag}{sufixo}"
+            obj.email = f"{obj.login_1sec}@{obj.domain_1sec}"
+            
+            return obj
+        except: return None
 
-            domain_obj = random.choice(dominios_validos)
-            domain = domain_obj['domain']
-            
-            nome_base = random.choice(nomes_lista)
-            sufixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=random.randint(3, 5)))
-            
-            email = f"{nome_base}{tag}_{sufixo}@{domain}"
-            senha = "SenhaTemporaria123"
-            
-            r = requests.post(f"https://api.mail.tm/accounts", json={"address": email, "password": senha}, timeout=10)
-            if r.status_code in [201, 422]:
-                r_tok = requests.post(f"https://api.mail.tm/token", json={"address": email, "password": senha}, timeout=10)
-                if r_tok.status_code == 200:
-                    token = r_tok.json()['token']
-                    if testar_acesso_conta(token):
-                        log_sucesso(f"Identidade ({domain}): {Cores.NEGRITO}{email}{Cores.RESET}")
-                        return email, senha, token, nome_base
-        except: time.sleep(1)
-        tentativas += 1
-    return None, None, None, None
-
-def esperar_codigo_email(token, filtro_assunto=""):
-    print(f"   {Cores.CIANO}⏳ Aguardando e-mail ({filtro_assunto})...{Cores.RESET}", end="", flush=True)
-    headers = {"Authorization": f"Bearer {token}"}
-    start = time.time()
-    
-    # 60 segundos de espera máxima para trocar logo de domínio
-    TIMEOUT_ESPERA = 60 
-    
-    while time.time() - start < TIMEOUT_ESPERA:
+    def esperar_codigo(self, obj, filtro):
         try:
-            print(".", end="", flush=True)
-            r = requests.get(f"https://api.mail.tm/messages", headers=headers, timeout=10)
+            url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={obj.login_1sec}&domain={obj.domain_1sec}"
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                msgs = r.json()
+                for msg in msgs:
+                    if filtro.lower() in msg['subject'].lower():
+                        id_msg = msg['id']
+                        url_read = f"https://www.1secmail.com/api/v1/?action=readMessage&login={obj.login_1sec}&domain={obj.domain_1sec}&id={id_msg}"
+                        r_read = requests.get(url_read, timeout=5)
+                        return r_read.json().get('textBody') or r_read.json().get('body')
+        except: pass
+        return None
+
+class ProviderMailTM:
+    """Provedor 2: Mail.tm (O clássico, requer registro)"""
+    def gerar(self):
+        obj = EmailSession()
+        obj.provider_name = "Mail.tm"
+        tag = CONF.get("tag_email", "rag")
+        nomes_lista = ['jose', 'junior', 'joao', 'carlos', 'ricardo', 'lucas', 'marcos']
+        
+        try:
+            r = requests.get("https://api.mail.tm/domains", timeout=5)
+            if r.status_code != 200: return None
+            
+            domains = r.json()['hydra:member']
+            # Tenta pegar um domínio diferente do padrão comfythings se possível
+            domain = random.choice(domains)['domain']
+            
+            obj.primeiro_nome = random.choice(nomes_lista)
+            sufixo = ''.join(random.choices(string.digits, k=3))
+            obj.email = f"{obj.primeiro_nome}{tag}_{sufixo}@{domain}"
+            
+            # Cria conta
+            r_acc = requests.post("https://api.mail.tm/accounts", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
+            if r_acc.status_code not in [201, 422]: return None
+            
+            # Pega Token
+            r_tok = requests.post("https://api.mail.tm/token", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
+            if r_tok.status_code == 200:
+                obj.token = r_tok.json()['token']
+                # Testa saúde
+                headers = {"Authorization": f"Bearer {obj.token}"}
+                r_test = requests.get(f"https://api.mail.tm/me", headers=headers, timeout=5)
+                if r_test.status_code == 200:
+                    return obj
+        except: pass
+        return None
+
+    def esperar_codigo(self, obj, filtro):
+        headers = {"Authorization": f"Bearer {obj.token}"}
+        try:
+            r = requests.get("https://api.mail.tm/messages", headers=headers, timeout=5)
             if r.status_code == 200:
                 msgs = r.json()['hydra:member']
-                if msgs:
-                    for msg in msgs:
-                        assunto = msg.get('subject', '')
-                        if filtro_assunto.lower() not in assunto.lower(): continue
-                        
-                        if not msg['seen']:
-                            det = requests.get(f"https://api.mail.tm/messages/{msg['id']}", headers=headers, timeout=10)
-                            texto = det.json()['text']
-                            requests.patch(f"https://api.mail.tm/messages/{msg['id']}", headers=headers, json={"seen": True})
-                            
-                            match = re.search(r'C[oó]digo de Verificaç[aã]o\s+([A-Za-z0-9]{6})', texto, re.IGNORECASE)
-                            if match:
-                                codigo = match.group(1)
-                                if "assets" not in codigo.lower():
-                                    print(f"\n   {Cores.VERDE}🔥 CÓDIGO RECEBIDO: {codigo}{Cores.RESET}")
-                                    return codigo
-            time.sleep(3)
-        except: time.sleep(3)
+                for msg in msgs:
+                    if filtro.lower() in msg['subject'].lower() and not msg['seen']:
+                        det = requests.get(f"https://api.mail.tm/messages/{msg['id']}", headers=headers)
+                        requests.patch(f"https://api.mail.tm/messages/{msg['id']}", headers=headers, json={"seen": True})
+                        return det.json()['text']
+        except: pass
+        return None
+
+# --- GERENCIADOR DE PROVEDORES ---
+def obter_servico_email(tentativa_global):
+    """
+    Se tentativa for PAR (0, 2, 4) -> Usa 1secmail
+    Se tentativa for IMPAR (1, 3, 5) -> Usa MailTM
+    """
+    provedores = [Provider1SecMail(), ProviderMailTM()]
+    indice = tentativa_global % len(provedores)
+    provedor_instancia = provedores[indice]
     
-    print(f"\n   {Cores.AMARELO}⚠️ Timeout: Código não chegou.{Cores.RESET}")
+    log_info(f"Gerando identidade via API: {Cores.AMARELO}{provedor_instancia.__class__.__name__}{Cores.RESET}...")
+    return provedor_instancia.gerar(), provedor_instancia
+
+def aguardar_codigo_universal(obj_email, provedor_instancia, filtro_assunto=""):
+    print(f"   {Cores.CIANO}⏳ Aguardando e-mail ({filtro_assunto}) em {obj_email.provider_name}...{Cores.RESET}", end="", flush=True)
+    start = time.time()
+    TIMEOUT = 50 # 50s é suficiente pra saber se tá bloqueado
+    
+    while time.time() - start < TIMEOUT:
+        print(".", end="", flush=True)
+        try:
+            corpo = provedor_instancia.esperar_codigo(obj_email, filtro_assunto)
+            if corpo:
+                match = re.search(r'C[oó]digo de Verificaç[aã]o\s+([A-Za-z0-9]{6})', corpo, re.IGNORECASE)
+                if match:
+                    codigo = match.group(1)
+                    if "assets" not in codigo.lower():
+                        print(f"\n   {Cores.VERDE}🔥 CÓDIGO RECEBIDO: {codigo}{Cores.RESET}")
+                        return codigo
+        except: pass
+        time.sleep(4)
+    
+    print(f"\n   {Cores.AMARELO}⚠️ Timeout no provedor {obj_email.provider_name}.{Cores.RESET}")
     return None
 
-# --- LICENÇA (AGORA COMPLETA) ---
+# ==============================================================================
+
+# --- LICENÇA ---
 def verificar_licenca_online(permissao_necessaria="all"):
-    """
-    Verifica se o e-mail tem a permissão necessária.
-    """
     # Configuração de Caminhos e E-mail
     email_conf = CONF.get("licenca_email", "") if 'CONF' in globals() else ""
     path = os.path.join(get_base_path(), "licenca.txt")
@@ -325,37 +378,41 @@ def verificar_licenca_online(permissao_necessaria="all"):
                         with open(path, "w") as f: f.write(email)
                         return True
             except: pass
-                
     except: pass
     
     if 'Cores' in globals(): print(f"{Cores.VERMELHO}Acesso Negado ou Erro de Conexão.{Cores.RESET}")
     else: print("Acesso Negado ou Erro de Conexão.")
     return False
 
-# --- FABRICAÇÃO COM RETRY ---
+# --- FABRICAÇÃO COM RETRY MULTI-PROVIDER ---
 def criar_uma_conta_com_retry(page):
-    """Tenta criar UMA conta, mas se o e-mail falhar, troca de domínio e tenta de novo"""
-    blacklist_dominios_sessao = []
+    """
+    Tenta criar UMA conta.
+    Se falhar o recebimento de e-mail, troca o PROVEDOR (1secmail <> MailTM)
+    """
     
-    for tentativa_dominio in range(3): # Tenta até 3 domínios diferentes
-        if tentativa_dominio > 0:
-            print(f"\n{Cores.AMARELO}♻️ Tentativa {tentativa_dominio+1} com NOVO domínio...{Cores.RESET}")
-        
-        email, _, token_email, primeiro_nome = gerar_email_premium(blacklist_dominios_sessao)
-        if not email: return False
-        
-        # Extrai o domínio atual e prepara pra blacklist se falhar
-        dominio_atual = email.split('@')[1]
-        
-        senha_rag = gerar_senha_ragnarok()
-        sobrenome = CONF.get("sobrenome_padrao", "Silva")
-        
-        try:
+    for tentativa in range(4): # Tenta até 4 vezes (2 ciclos completos de provedores)
+        if tentativa > 0:
+            print(f"\n{Cores.AMARELO}♻️ Falha anterior. Alternando Provedor de E-mail (Tentativa {tentativa+1})...{Cores.RESET}")
             try:
                 page.run_cdp('Network.clearBrowserCookies')
                 page.run_cdp('Network.clearBrowserCache')
             except: pass
+        
+        # 1. OBTER E-MAIL (Aqui ele decide qual API usar)
+        obj_email, provider_instancia = obter_servico_email(tentativa)
+        
+        if not obj_email:
+            log_erro("Não foi possível gerar e-mail com este provedor. Tentando próximo...")
+            continue
             
+        log_sucesso(f"E-mail Gerado: {Cores.NEGRITO}{obj_email.email}{Cores.RESET}")
+        
+        # --- PREPARAÇÃO ---
+        senha_rag = gerar_senha_ragnarok()
+        sobrenome = CONF.get("sobrenome_padrao", "Silva")
+        
+        try:
             log_info("Acessando Cadastro...")
             page.get("https://member.gnjoylatam.com/pt/join")
             
@@ -364,23 +421,22 @@ def criar_uma_conta_com_retry(page):
 
             vencer_cloudflare(page, checar_cookies=True)
 
-            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(email)
+            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj_email.email)
             delay_humano()
             
             if not clicar_com_seguranca(page, 'text=Enviar verificação', "Botão Enviar"):
-                 blacklist_dominios_sessao.append(dominio_atual)
-                 continue # Tenta proximo
+                 continue 
 
-            codigo1 = esperar_codigo_email(token_email, filtro_assunto="Cadastro")
+            # 2. AGUARDAR CÓDIGO (Universal)
+            codigo1 = aguardar_codigo_universal(obj_email, provider_instancia, filtro_assunto="Cadastro")
             
-            # --- PONTO CRÍTICO: SE NÃO CHEGOU, TROCA O DOMÍNIO ---
+            # --- SE NÃO CHEGOU, ABORTA E TROCA PROVEDOR ---
             if not codigo1:
-                log_erro(f"Domínio ruim detectado: {dominio_atual}")
-                blacklist_dominios_sessao.append(dominio_atual)
-                continue # Volta pro inicio do loop (gera novo email)
+                log_aviso(f"Provedor {obj_email.provider_name} parece bloqueado ou lento.")
+                continue 
             
-            # SE CHEGOU AQUI, O DOMÍNIO É BOM! SEGUE O BAILE
-            log_sistema(f"Código 1: {codigo1}")
+            # --- SEGUIR FLUXO ---
+            log_sistema(f"Código validado: {codigo1}")
             page.ele('#authnumber').input(codigo1)
             delay_humano()
             
@@ -397,7 +453,7 @@ def criar_uma_conta_com_retry(page):
             if btn_pais and "Brasil" not in btn_pais.text:
                 btn_pais.click(); delay_humano(); page.ele('text=Brasil').click()
             
-            page.ele('#firstname').input(primeiro_nome.capitalize())
+            page.ele('#firstname').input(obj_email.primeiro_nome.capitalize())
             page.ele('#lastname').input(sobrenome)
             page.ele('#birthday').input("01/01/1995")
             delay_humano()
@@ -426,7 +482,7 @@ def criar_uma_conta_com_retry(page):
             page.wait.url_change('login', timeout=TIMEOUT_PADRAO)
             vencer_cloudflare(page, checar_cookies=False)
             
-            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(email)
+            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj_email.email)
             delay_humano()
             page.ele('#password').input(senha_rag)
             delay_humano()
@@ -451,8 +507,9 @@ def criar_uma_conta_com_retry(page):
             
             if not clicou: return False
                 
-            codigo2 = esperar_codigo_email(token_email, filtro_assunto="OTP")
-            if not codigo2: return False
+            # 3. AGUARDAR CÓDIGO OTP (Universal)
+            codigo2 = aguardar_codigo_universal(obj_email, provider_instancia, filtro_assunto="OTP")
+            if not codigo2: return False 
             
             page.wait.ele_displayed('#authnumber', timeout=TIMEOUT_PADRAO)
             page.ele('#authnumber').input(codigo2)
@@ -490,11 +547,11 @@ def criar_uma_conta_com_retry(page):
                             achou_ok = True; break
                     
                     status = "PRONTA_PARA_FARMAR" if achou_ok else "VERIFICAR_MANUALMENTE"
-                    salvar_conta_backup(email, senha_rag, seed_text, status)
-                    consolidar_conta_no_principal(email, senha_rag)
+                    salvar_conta_backup(obj_email.email, senha_rag, seed_text, status)
+                    consolidar_conta_no_principal(obj_email.email, senha_rag)
                     return True # SUCESSO TOTAL
                 else:
-                    salvar_conta_backup(email, senha_rag, seed_text, status="FALTA_ATIVAR_APP")
+                    salvar_conta_backup(obj_email.email, senha_rag, seed_text, status="FALTA_ATIVAR_APP")
                     return True
             else:
                 return False
@@ -503,14 +560,14 @@ def criar_uma_conta_com_retry(page):
             log_erro(f"Erro no processo: {e}")
             return False # Falha genérica
             
-    return False # Falhou 3 vezes
+    return False # Falhou todas as tentativas
 
 # --- MAIN ATUALIZADA ---
 def main():
     if not verificar_licenca_online("fabricador"): 
         return
 
-    print(f"\n{Cores.CIANO}>>> FÁBRICA DE CONTAS PREMIUM (Anti-Block){Cores.RESET}")
+    print(f"\n{Cores.CIANO}>>> FÁBRICA DE CONTAS PREMIUM (Multi-Provider){Cores.RESET}")
     try: qtd = int(input("\nQuantas contas deseja criar? ").strip())
     except: qtd = 1
     
@@ -529,7 +586,7 @@ def main():
     for i in range(qtd):
         print(f"\n{Cores.NEGRITO}=== CONTA {i+1} DE {qtd} ==={Cores.RESET}")
         
-        # CHAMA A NOVA FUNÇÃO COM RETRY
+        # CHAMA A NOVA FUNÇÃO COM RETRY MULTI-PROVIDER
         if criar_uma_conta_com_retry(page):
             sucessos += 1
             print(f"{Cores.VERDE}✅ Sucesso na conta {i+1}!{Cores.RESET}")

@@ -21,7 +21,7 @@ class Cores:
     NEGRITO = '\033[1m'
 
 # ===== CONFIGURAÇÕES =====
-VERSAO_ATUAL = "1.0.1"
+VERSAO_ATUAL = "1.0.2"
 ARQUIVO_NOVAS = "novas_contas.json"
 ARQUIVO_PRINCIPAL = "accounts.json"
 ARQUIVO_CONFIG = "config.json"
