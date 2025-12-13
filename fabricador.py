@@ -175,41 +175,49 @@ def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
     log_erro(f"Falha ao clicar em {nome_elemento}.")
     return False
 
-# --- BYPASS CLOUDFLARE RIGOROSO (V51) ---
+# --- BYPASS CLOUDFLARE PRECISO (V52) ---
 def vencer_cloudflare(page, checar_cookies=True):
     """
-    Verifica Cloudflare com as classes específicas do Ragnarok e delay de segurança.
+    Lógica de 3 etapas:
+    1. Delay de Segurança (Wait for rendering).
+    2. Check de Status (Já está 'Sucesso'?).
+    3. Ação (Marcha Ré) apenas se necessário.
     """
     if checar_cookies: fechar_cookies(page)
     
-    # 1. Verifica SUCESSO IMEDIATO (Sua classe descoberta)
-    if page.ele('.page_success__gilOx') or page.ele('.turnstile_success__Z3Tot') or page.ele('text:Verificação de segurança para acesso concluída'):
-        # Delay de segurança para garantir que o JS do site processou o sucesso
-        time.sleep(2)
+    # 1. DELAY DE SEGURANÇA (Fundamental)
+    # Dá tempo do script do site rodar e atualizar o texto do widget
+    log_sistema("Analisando segurança (Aguardando)...")
+    time.sleep(3) 
+
+    # 2. VERIFICAÇÃO DE SUCESSO (Classe Específica do Site)
+    # Se encontrar essa classe, está tudo verde.
+    if page.ele('.page_success__gilOx') or page.ele('text:Verificação de segurança para acesso concluída'):
+        # log_sistema("Cloudflare OK (Pré-validado).")
         return
 
-    # 2. Se não achou sucesso, procura bloqueio para resolver
-    ele_bloqueio = page.ele('text=Verificando segurança') or page.ele('text=Confirme que é humano') or page.ele('.cb-lb')
+    # 3. SE NÃO TEM SUCESSO, APLICA MARCHA RÉ
+    # Se chegou aqui, ou está "Verificando..." ou travado.
+    log_sistema("Status pendente. Aplicando técnica de foco...")
     
-    if ele_bloqueio and ele_bloqueio.states.is_displayed:
-        log_sistema("Resolvendo Cloudflare...")
-        
-        # Tenta focar no email (se existir por baixo) para acordar o captcha
-        if page.ele('#email'):
-            try:
-                page.ele('#email').click()
-                time.sleep(0.3)
-                page.actions.key_down(Keys.SHIFT).tap(Keys.TAB).key_up(Keys.SHIFT) # Volta foco
-                time.sleep(2)
-            except: pass
-        
+    if page.ele('#email'):
+        try:
+            # Clica no email e volta com Shift+Tab para acordar o widget
+            page.ele('#email').click()
+            time.sleep(0.3)
+            page.actions.key_down(Keys.SHIFT).tap(Keys.TAB).key_up(Keys.SHIFT)
+            time.sleep(4) # Espera o widget reagir
+        except: pass
+    else:
+        # Fallback se não achar o email (ex: tela de login diferente)
         try: 
             page.ele('tag:body').click()
             time.sleep(2)
         except: pass
-        
-        # Espera extra para ver se o sucesso aparece depois da interação
-        time.sleep(3) 
+
+    # Verificação Final (Opcional, mas bom para debug)
+    if page.ele('.page_success__gilOx'):
+        pass # Resolvido
 
 # --- FUNÇÃO DE LIMPEZA DE SESSÃO ---
 def garantir_logout(page):
@@ -352,8 +360,8 @@ def criar_conta(page):
         if not obj: continue
         log_sucesso(f"E-mail Gerado: {Cores.NEGRITO}{obj.email}{Cores.RESET}")
         
+        # PROCESSO CADASTRO
         try:
-            # === CADASTRO ===
             log_info("Acessando Cadastro...")
             page.get("https://member.gnjoylatam.com/pt/join")
             
@@ -362,6 +370,7 @@ def criar_conta(page):
                 log_aviso("Site demorou. Atualizando...")
                 page.refresh()
                 vencer_cloudflare(page)
+                # Tenta logout de novo caso tenha carregado a home logada
                 garantir_logout(page)
                 if not page.wait.ele_displayed('#email', timeout=20):
                     log_erro("Site não carregou.")
@@ -375,6 +384,7 @@ def criar_conta(page):
             if not clicar_com_seguranca(page, 'text=Enviar verificação', "Botão Enviar"):
                 continue 
             
+            # Espera Código
             print(f"   {Cores.CIANO}⏳ Aguardando e-mail (Cadastro) em {obj.provider_name}...{Cores.RESET}", end="", flush=True)
             cod1 = None
             start_wait = time.time()
@@ -417,7 +427,7 @@ def criar_conta(page):
             
             log_sucesso("Cadastro enviado!")
             
-            # === LOGIN (COM RESGATE) ===
+            # --- LOGIN (COM RESGATE) ---
             log_info("Fazendo Login...")
             if page.ele('text=Entrar'): clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar")
             else: page.get("https://login.gnjoylatam.com")
