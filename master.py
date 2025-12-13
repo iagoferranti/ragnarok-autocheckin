@@ -29,7 +29,6 @@ ARQUIVO_CONFIG = "config.json"
 # URLs CONFIGURADAS PARA SEU REPO
 URL_VERSION_TXT = "https://raw.githubusercontent.com/iagoferranti/ragnarok-autocheckin/main/version.txt"
 URL_DOWNLOAD_EXE = "https://github.com/iagoferranti/ragnarok-autocheckin/releases/latest/download/RagnarokMasterTool.exe"
-
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
 
 # Importa os módulos
@@ -52,21 +51,20 @@ def exibir_logo():
     ██╔══██╗██╔══██║██║   ██║    ██║╚██╔╝██║██╔══██║╚════██║   ██║   ██╔══╝  ██╔══██╗
     ██║  ██║██║  ██║╚██████╔╝    ██║ ╚═╝ ██║██║  ██║███████║   ██║   ███████╗██║  ██║
     ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝     ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
-                               {Cores.AMARELO}⚡ LATAM EDITION v{VERSAO_ATUAL} ⚡{Cores.RESET}
+                                {Cores.AMARELO}⚡ LATAM EDITION v{VERSAO_ATUAL} ⚡{Cores.RESET}
     """)
 
 def carregar_config():
-    # 1. Defina aqui as configurações que devem ser geradas para o cliente
     config_padrao = {
         "licenca_email": "",
         "headless": False,
         "tag_email": "rag",
         "sobrenome_padrao": "Adamantio da Silva",
         "telegram_token": "",
-        "telegram_chat_id": ""
+        "telegram_chat_id": "",
+        "smailpro_api_key": ""
     }
     
-    # 2. Se o arquivo NÃO existir, o Python CRIA ele agora
     if not os.path.exists(ARQUIVO_CONFIG):
         print(f"{Cores.CINZA}⚙️  Criando arquivo de configuração padrão...{Cores.RESET}")
         try:
@@ -77,11 +75,9 @@ def carregar_config():
             print(f"Erro ao criar config: {e}")
             return config_padrao
 
-    # 3. Se existir, ele lê e atualiza campos faltantes (segurança extra)
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
             user_config = json.load(f)
-            # Garante que chaves novas apareçam mesmo em configs antigas
             config_padrao.update(user_config)
             return config_padrao
     except:
@@ -98,7 +94,6 @@ def get_short_path(path):
     return buffer.value
 
 def verificar_atualizacao():
-    # Só roda se for EXE compilado
     if not getattr(sys, 'frozen', False): return
 
     print(f"\n{Cores.CIANO}🔄 Verificando atualizações...{Cores.RESET}")
@@ -111,7 +106,7 @@ def verificar_atualizacao():
                 print(f"Sua versão: {VERSAO_ATUAL}")
                 if input("   >> Atualizar agora? (S/N): ").lower() == 's':
                     realizar_update()
-                    sys.exit() # Fecha para atualizar
+                    sys.exit()
             else:
                 print(f"{Cores.VERDE}✅ Sistema atualizado.{Cores.RESET}")
                 time.sleep(1)
@@ -156,7 +151,40 @@ def realizar_update():
         print(f"{Cores.VERMELHO}Erro update: {e}{Cores.RESET}")
         input()
 
-# --- SISTEMA DE LOGIN ---
+# --- SISTEMA DE LOGIN E VERIFICAÇÃO ---
+
+def verificar_licenca_online(permissao_necessaria="all"):
+    """
+    Função acessada pelos módulos externos para validar a licença silenciosamente.
+    Lê o e-mail do arquivo local e valida no Gist.
+    """
+    path_licenca = "licenca.txt"
+    email = ""
+    
+    # Tenta ler o email salvo
+    if os.path.exists(path_licenca):
+        try: 
+            with open(path_licenca, "r") as f: email = f.read().strip()
+        except: pass
+    
+    if not email: return False
+
+    try:
+        r = requests.get(URL_LISTA_VIP, timeout=5)
+        if r.status_code == 200:
+            dados = r.json()
+            if isinstance(dados, list): dados = {e: ["all"] for e in dados}
+            dados = {k.lower().strip(): v for k, v in dados.items()}
+            
+            if email.lower().strip() in dados:
+                perms = dados[email.lower().strip()]
+                if "all" in perms or permissao_necessaria in perms:
+                    return True
+    except: 
+        pass # Se der erro de rede, nega por segurança ou pode mudar pra return True se quiser liberar offline
+        
+    return False
+
 def autenticar_usuario():
     limpar_tela()
     exibir_logo()
@@ -271,7 +299,7 @@ def main():
         input("\nEnter para sair...")
         sys.exit()
 
-    # 2. Verifica Update (Novo)
+    # 2. Verifica Update
     verificar_atualizacao()
 
     while True:

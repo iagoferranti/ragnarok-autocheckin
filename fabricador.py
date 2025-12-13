@@ -6,19 +6,18 @@ import string
 import json
 import os
 import sys
-import shutil
 from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
-os.system('') # Cores no CMD
+os.system('') # Habilita cores no CMD
 
 # --- CONFIGURAÇÕES PADRÃO ---
 ARQUIVO_CONFIG = "config.json"
 ARQUIVO_SALVAR = "novas_contas.json"
 ARQUIVO_PRINCIPAL = "accounts.json"
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
-TIMEOUT_PADRAO = 30 
+TIMEOUT_PADRAO = 40 
 
 # --- CLASSE DE ESTILO ---
 class Cores:
@@ -42,7 +41,7 @@ def carregar_config():
         "licenca_email": "",
         "headless": False,
         "tag_email": "rag",
-        "sobrenome_padrao": "Adamantio da Silva",
+        "sobrenome_padrao": "Silva",
         "telegram_token": "",
         "telegram_chat_id": ""
     }
@@ -127,7 +126,24 @@ def gerar_senha_ragnarok():
     return "".join(senha)
 
 def delay_humano():
-    time.sleep(random.uniform(0.6, 1.4))
+    time.sleep(random.uniform(0.8, 1.5))
+
+# --- EXTRATOR INTELIGENTE ---
+def limpar_html(texto_html):
+    clean = re.compile('<.*?>')
+    return re.sub(clean, ' ', texto_html)
+
+def extrair_codigo_seguro(texto_bruto):
+    if not texto_bruto: return None
+    texto_limpo = limpar_html(texto_bruto)
+    match = re.search(r'C[oó]digo de Verificaç[aã]o.*?([A-Za-z0-9]{6})', texto_limpo, re.IGNORECASE | re.DOTALL)
+    
+    if match:
+        codigo = match.group(1).strip()
+        palavras_proibidas = ['abaixo', 'assets', 'height', 'width', 'style', 'follow', 'codigo', 'verify', 'click', 'button', 'target', 'class', 'border']
+        if codigo.lower() in palavras_proibidas: return None
+        return codigo
+    return None
 
 # --- DRISSION HELPERS ---
 def fechar_cookies(page):
@@ -139,7 +155,6 @@ def fechar_cookies(page):
     except: pass
 
 def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
-    log_sistema(f"Procurando: {nome_elemento}...")
     for tentativa in range(3):
         try:
             btn = page.wait.ele_displayed(seletor, timeout=TIMEOUT_PADRAO)
@@ -162,129 +177,104 @@ def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
 
 def vencer_cloudflare(page, checar_cookies=True):
     if checar_cookies: fechar_cookies(page)
-    log_sistema("Analisando Cloudflare...")
-    time.sleep(3) 
-    precisa_clicar = False
     
-    ele_sucesso = page.ele('.page_success__gilOx')
-    if not ele_sucesso: ele_sucesso = page.ele('text:concluída')
-    
-    if ele_sucesso and ele_sucesso.states.is_displayed:
-        log_sucesso("Cloudflare já validado!")
-        precisa_clicar = False
-    else:
-        ele_check = page.ele('text=Confirme que é humano') or page.ele('.cb-lb')
-        ele_load = page.ele('text=Verificando segurança')
-        if (ele_check and ele_check.states.is_displayed) or (ele_load and ele_load.states.is_displayed):
-            precisa_clicar = True
-        else:
-            precisa_clicar = True
-    
-    if precisa_clicar:
-        log_sistema("Executando bypass...")
-        try: page.ele('tag:body').click()
-        except: pass
-        if page.wait.ele_displayed('#email', timeout=5):
-            page.scroll.to_location(0, 200)
-            page.run_js("document.getElementById('email').focus()")
-            time.sleep(0.2)
-            page.ele('#email').click()
-            time.sleep(0.5)
-        for _ in range(4): 
-            page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
-            time.sleep(0.3)
-        page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
-        log_sistema("Aguardando validação...")
-        time.sleep(5)
+    if page.ele('.page_success__gilOx') or page.ele('text:concluída') or page.ele('#email') or page.ele('.turnstile_success__Z3Tot'):
+        return
 
-# ==============================================================================
-# SISTEMA DE PROVEDORES DE E-MAIL (MULTI-PROVIDER)
-# ==============================================================================
+    ele_check = page.ele('text=Confirme que é humano') or page.ele('.cb-lb') or page.ele('text=Verificando segurança')
+    if ele_check:
+        log_sistema("Resolvendo Cloudflare...")
+        
+        # Tenta focar no email para forçar o captcha a reagir
+        if page.ele('#email'):
+            try:
+                page.ele('#email').click(); time.sleep(0.3)
+                page.actions.key_down(Keys.SHIFT).tap(Keys.TAB).key_up(Keys.SHIFT)
+                time.sleep(3)
+            except: pass
+            
+        time.sleep(2)
+        try: 
+            page.ele('tag:body').click()
+            time.sleep(4)
+        except: pass
+
+# --- FUNÇÃO DE LIMPEZA DE SESSÃO ---
+def garantir_logout(page):
+    """Garante que não há sessão ativa antes de criar nova conta"""
+    try:
+        # 1. Limpeza técnica (Cookies + Storage)
+        page.run_cdp('Network.clearBrowserCookies')
+        page.run_cdp('Network.clearBrowserCache')
+        page.run_js('localStorage.clear(); sessionStorage.clear();')
+    except: pass
+
+    # 2. Limpeza visual (Se houver botão de logout, clica)
+    try:
+        btn_logout = page.ele('.header_logoutBtn__6Pv_m')
+        if btn_logout:
+            log_sistema("Sessão ativa detectada. Fazendo Logout...")
+            btn_logout.click()
+            time.sleep(3)
+    except: pass
+
+# ================= PROVEDORES DE E-MAIL =================
 
 class EmailSession:
     def __init__(self):
-        self.email = None
-        self.senha_api = "Senha123" # Usado no MailTM
-        self.token = None # Usado no MailTM
-        self.login_1sec = None # Usado no 1secmail
-        self.domain_1sec = None # Usado no 1secmail
-        self.provider_name = ""
+        self.email = None; self.senha_api = "Senha123"; self.token = None 
+        self.login_1sec = None; self.domain_1sec = None; self.provider_name = ""
         self.primeiro_nome = "Jose"
+        self.session_requests = None 
 
-class Provider1SecMail:
-    """Provedor 1: 1secmail (Muito rápido, sem registro)"""
+class ProviderGuerrilla:
     def gerar(self):
         obj = EmailSession()
-        obj.provider_name = "1secmail"
+        obj.provider_name = "GuerrillaMail"
+        obj.session_requests = requests.Session()
         tag = CONF.get("tag_email", "rag")
-        nomes_lista = ['jose', 'junior', 'joao', 'carlos', 'ricardo', 'lucas', 'marcos']
-        
         try:
-            # Tenta pegar lista de domínios
-            r = requests.get("https://www.1secmail.com/api/v1/?action=getDomainList", timeout=5)
-            if r.status_code == 200:
-                domains = r.json()
-            else:
-                domains = ['1secmail.com', '1secmail.org', '1secmail.net'] # Fallback
+            r = obj.session_requests.get("https://api.guerrillamail.com/ajax.php?f=get_email_address", timeout=10)
+            data = r.json()
+            user_novo = f"{random.choice(['sam','max','leo'])}{tag}{random.randint(100,999)}"
+            r_set = obj.session_requests.get(f"https://api.guerrillamail.com/ajax.php?f=set_email_user&email_user={user_novo}&lang=en", timeout=10)
             
-            obj.domain_1sec = random.choice(domains)
-            obj.primeiro_nome = random.choice(nomes_lista)
-            
-            sufixo = ''.join(random.choices(string.digits, k=4))
-            obj.login_1sec = f"{obj.primeiro_nome}{tag}{sufixo}"
-            obj.email = f"{obj.login_1sec}@{obj.domain_1sec}"
-            
+            if r_set.status_code == 200 and 'email_addr' in r_set.json():
+                obj.email = r_set.json()['email_addr']
+            else: obj.email = data['email_addr']
             return obj
         except: return None
 
     def esperar_codigo(self, obj, filtro):
         try:
-            url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={obj.login_1sec}&domain={obj.domain_1sec}"
-            r = requests.get(url, timeout=5)
+            r = obj.session_requests.get(f"https://api.guerrillamail.com/ajax.php?f=check_email&seq=0", timeout=10)
             if r.status_code == 200:
-                msgs = r.json()
-                for msg in msgs:
-                    if filtro.lower() in msg['subject'].lower():
-                        id_msg = msg['id']
-                        url_read = f"https://www.1secmail.com/api/v1/?action=readMessage&login={obj.login_1sec}&domain={obj.domain_1sec}&id={id_msg}"
-                        r_read = requests.get(url_read, timeout=5)
-                        return r_read.json().get('textBody') or r_read.json().get('body')
+                data = r.json()
+                lista = data.get('list', [])
+                for msg in lista:
+                    if filtro.lower() in msg['mail_subject'].lower():
+                        mid = msg['mail_id']
+                        r_fetch = obj.session_requests.get(f"https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id={mid}", timeout=10)
+                        if r_fetch.status_code == 200:
+                            return r_fetch.json().get('mail_body', '')
         except: pass
         return None
 
 class ProviderMailTM:
-    """Provedor 2: Mail.tm (O clássico, requer registro)"""
     def gerar(self):
-        obj = EmailSession()
-        obj.provider_name = "Mail.tm"
+        obj = EmailSession(); obj.provider_name = "Mail.tm"
         tag = CONF.get("tag_email", "rag")
-        nomes_lista = ['jose', 'junior', 'joao', 'carlos', 'ricardo', 'lucas', 'marcos']
-        
         try:
             r = requests.get("https://api.mail.tm/domains", timeout=5)
-            if r.status_code != 200: return None
-            
-            domains = r.json()['hydra:member']
-            # Tenta pegar um domínio diferente do padrão comfythings se possível
-            domain = random.choice(domains)['domain']
-            
-            obj.primeiro_nome = random.choice(nomes_lista)
-            sufixo = ''.join(random.choices(string.digits, k=3))
-            obj.email = f"{obj.primeiro_nome}{tag}_{sufixo}@{domain}"
-            
-            # Cria conta
-            r_acc = requests.post("https://api.mail.tm/accounts", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
-            if r_acc.status_code not in [201, 422]: return None
-            
-            # Pega Token
+            doms = r.json()['hydra:member']
+            coms = [d['domain'] for d in doms if d['domain'].endswith(".com")]
+            domain = random.choice(coms) if coms else random.choice(doms)['domain']
+            obj.email = f"user{tag}{random.randint(1000,9999)}@{domain}"
+            requests.post("https://api.mail.tm/accounts", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
             r_tok = requests.post("https://api.mail.tm/token", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
             if r_tok.status_code == 200:
                 obj.token = r_tok.json()['token']
-                # Testa saúde
-                headers = {"Authorization": f"Bearer {obj.token}"}
-                r_test = requests.get(f"https://api.mail.tm/me", headers=headers, timeout=5)
-                if r_test.status_code == 200:
-                    return obj
+                return obj
         except: pass
         return None
 
@@ -293,8 +283,7 @@ class ProviderMailTM:
         try:
             r = requests.get("https://api.mail.tm/messages", headers=headers, timeout=5)
             if r.status_code == 200:
-                msgs = r.json()['hydra:member']
-                for msg in msgs:
+                for msg in r.json()['hydra:member']:
                     if filtro.lower() in msg['subject'].lower() and not msg['seen']:
                         det = requests.get(f"https://api.mail.tm/messages/{msg['id']}", headers=headers)
                         requests.patch(f"https://api.mail.tm/messages/{msg['id']}", headers=headers, json={"seen": True})
@@ -302,171 +291,117 @@ class ProviderMailTM:
         except: pass
         return None
 
-# --- GERENCIADOR DE PROVEDORES ---
-def obter_servico_email(tentativa_global):
-    """
-    Se tentativa for PAR (0, 2, 4) -> Usa 1secmail
-    Se tentativa for IMPAR (1, 3, 5) -> Usa MailTM
-    """
-    provedores = [Provider1SecMail(), ProviderMailTM()]
-    indice = tentativa_global % len(provedores)
-    provedor_instancia = provedores[indice]
-    
-    log_info(f"Gerando identidade via API: {Cores.AMARELO}{provedor_instancia.__class__.__name__}{Cores.RESET}...")
-    return provedor_instancia.gerar(), provedor_instancia
-
-def aguardar_codigo_universal(obj_email, provedor_instancia, filtro_assunto=""):
-    print(f"   {Cores.CIANO}⏳ Aguardando e-mail ({filtro_assunto}) em {obj_email.provider_name}...{Cores.RESET}", end="", flush=True)
-    start = time.time()
-    TIMEOUT = 50 # 50s é suficiente pra saber se tá bloqueado
-    
-    while time.time() - start < TIMEOUT:
-        print(".", end="", flush=True)
+class Provider1SecMail:
+    def gerar(self):
+        obj = EmailSession(); obj.provider_name = "1secmail"
+        tag = CONF.get("tag_email", "rag")
         try:
-            corpo = provedor_instancia.esperar_codigo(obj_email, filtro_assunto)
-            if corpo:
-                match = re.search(r'C[oó]digo de Verificaç[aã]o\s+([A-Za-z0-9]{6})', corpo, re.IGNORECASE)
-                if match:
-                    codigo = match.group(1)
-                    if "assets" not in codigo.lower():
-                        print(f"\n   {Cores.VERDE}🔥 CÓDIGO RECEBIDO: {codigo}{Cores.RESET}")
-                        return codigo
+            r = requests.get("https://www.1secmail.com/api/v1/?action=getDomainList", timeout=5)
+            if r.status_code == 200:
+                doms = r.json()
+                bons = [d for d in doms if d.endswith(".com")]
+                obj.domain_1sec = random.choice(bons) if bons else "esiix.com"
+            else: obj.domain_1sec = "esiix.com"
+            obj.login_1sec = f"u{tag}{random.randint(100,999)}"
+            obj.email = f"{obj.login_1sec}@{obj.domain_1sec}"
+            return obj
+        except: return None
+
+    def esperar_codigo(self, obj, filtro):
+        try:
+            url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={obj.login_1sec}&domain={obj.domain_1sec}"
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                for msg in r.json():
+                    if filtro.lower() in msg['subject'].lower():
+                        r2 = requests.get(f"https://www.1secmail.com/api/v1/?action=readMessage&login={obj.login_1sec}&domain={obj.domain_1sec}&id={msg['id']}", timeout=5)
+                        return r2.json().get('textBody') or r2.json().get('body')
         except: pass
-        time.sleep(4)
-    
-    print(f"\n   {Cores.AMARELO}⚠️ Timeout no provedor {obj_email.provider_name}.{Cores.RESET}")
-    return None
+        return None
 
-# ==============================================================================
+# --- LOOP PRINCIPAL ---
+def criar_conta(page):
+    
+    # 1. BLINDAGEM: Garante logout ANTES de começar qualquer coisa
+    garantir_logout(page)
 
-# --- LICENÇA ---
-def verificar_licenca_online(permissao_necessaria="all"):
-    # Configuração de Caminhos e E-mail
-    email_conf = CONF.get("licenca_email", "") if 'CONF' in globals() else ""
-    path = os.path.join(get_base_path(), "licenca.txt")
-    
-    if email_conf: email = email_conf
-    elif os.path.exists(path):
-        try: 
-            with open(path, "r") as f: email = f.read().strip()
-        except: email = ""
-    else: email = ""
-    
-    if not email:
-        if 'Cores' in globals(): print(f"{Cores.AMARELO}Licença não encontrada.{Cores.RESET}")
-        else: print("Licença não encontrada.")
-        email = input("Digite seu E-mail: ").strip()
-        
-    try:
-        r = requests.get(URL_LISTA_VIP, timeout=10)
-        if r.status_code == 200:
-            try:
-                dados_licenca = r.json()
-                if isinstance(dados_licenca, list):
-                    dados_licenca = {e: ["all"] for e in dados_licenca}
-                
-                dados_licenca = {k.lower().strip(): v for k, v in dados_licenca.items()}
-                email_norm = email.lower().strip()
-                
-                if email_norm in dados_licenca:
-                    permissoes = dados_licenca[email_norm]
-                    acesso_liberado = False
-                    if "all" in permissoes: acesso_liberado = True
-                    elif permissao_necessaria in permissoes: acesso_liberado = True
-                    
-                    if acesso_liberado:
-                        with open(path, "w") as f: f.write(email)
-                        return True
-            except: pass
-    except: pass
-    
-    if 'Cores' in globals(): print(f"{Cores.VERMELHO}Acesso Negado ou Erro de Conexão.{Cores.RESET}")
-    else: print("Acesso Negado ou Erro de Conexão.")
-    return False
-
-# --- FABRICAÇÃO COM RETRY MULTI-PROVIDER ---
-def criar_uma_conta_com_retry(page):
-    """
-    Tenta criar UMA conta.
-    Se falhar o recebimento de e-mail, troca o PROVEDOR (1secmail <> MailTM)
-    """
-    
-    for tentativa in range(4): # Tenta até 4 vezes (2 ciclos completos de provedores)
+    for tentativa in range(3):
         if tentativa > 0:
-            print(f"\n{Cores.AMARELO}♻️ Falha anterior. Alternando Provedor de E-mail (Tentativa {tentativa+1})...{Cores.RESET}")
-            try:
-                page.run_cdp('Network.clearBrowserCookies')
-                page.run_cdp('Network.clearBrowserCache')
-            except: pass
-        
-        # 1. OBTER E-MAIL (Aqui ele decide qual API usar)
-        obj_email, provider_instancia = obter_servico_email(tentativa)
-        
-        if not obj_email:
-            log_erro("Não foi possível gerar e-mail com este provedor. Tentando próximo...")
-            continue
+            print(f"\n{Cores.AMARELO}♻️ Alternando Provedor (Tentativa {tentativa+1})...{Cores.RESET}")
+            # Limpa cookies entre tentativas também
+            garantir_logout(page)
             
-        log_sucesso(f"E-mail Gerado: {Cores.NEGRITO}{obj_email.email}{Cores.RESET}")
+        if tentativa == 0: prov = ProviderGuerrilla()
+        elif tentativa == 1: prov = ProviderMailTM()
+        else: prov = Provider1SecMail()
+            
+        log_info(f"Gerando identidade via: {Cores.AMARELO}{prov.__class__.__name__}{Cores.RESET}...")
+        obj = prov.gerar()
+        if not obj: continue
+        log_sucesso(f"E-mail Gerado: {Cores.NEGRITO}{obj.email}{Cores.RESET}")
         
-        # --- PREPARAÇÃO ---
-        senha_rag = gerar_senha_ragnarok()
-        sobrenome = CONF.get("sobrenome_padrao", "Silva")
-        
+        # PROCESSO CADASTRO
         try:
             log_info("Acessando Cadastro...")
             page.get("https://member.gnjoylatam.com/pt/join")
             
-            if not page.wait.ele_displayed('#email', timeout=TIMEOUT_PADRAO):
-                return False
+            # REFRESH SE TRAVAR
+            if not page.wait.ele_displayed('#email', timeout=20):
+                log_aviso("Site demorou. Atualizando...")
+                page.refresh()
+                vencer_cloudflare(page)
+                # Tenta logout de novo caso tenha carregado a home logada
+                garantir_logout(page)
+                if not page.wait.ele_displayed('#email', timeout=20):
+                    log_erro("Site não carregou.")
+                    continue 
 
             vencer_cloudflare(page, checar_cookies=True)
 
-            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj_email.email)
+            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj.email)
             delay_humano()
             
             if not clicar_com_seguranca(page, 'text=Enviar verificação', "Botão Enviar"):
-                 continue 
-
-            # 2. AGUARDAR CÓDIGO (Universal)
-            codigo1 = aguardar_codigo_universal(obj_email, provider_instancia, filtro_assunto="Cadastro")
-            
-            # --- SE NÃO CHEGOU, ABORTA E TROCA PROVEDOR ---
-            if not codigo1:
-                log_aviso(f"Provedor {obj_email.provider_name} parece bloqueado ou lento.")
                 continue 
             
-            # --- SEGUIR FLUXO ---
-            log_sistema(f"Código validado: {codigo1}")
-            page.ele('#authnumber').input(codigo1)
-            delay_humano()
+            # Espera Código
+            print(f"   {Cores.CIANO}⏳ Aguardando e-mail (Cadastro) em {obj.provider_name}...{Cores.RESET}", end="", flush=True)
+            cod1 = None
+            start_wait = time.time()
+            while time.time() - start_wait < 50:
+                print(".", end="", flush=True)
+                val = prov.esperar_codigo(obj, "Cadastro")
+                if val:
+                    cod_extraido = extrair_codigo_seguro(val)
+                    if cod_extraido: cod1 = cod_extraido; break
+                time.sleep(4)
             
-            try:
-                btn = page.ele('text=Verificação concluída') or page.ele('.mailauth_keyColor__by8Xo')
-                if btn and not btn.attr('disabled'): btn.click()
+            if not cod1:
+                print(f"\n   {Cores.VERMELHO}❌ Timeout.{Cores.RESET}")
+                continue 
+                
+            print(f"\n   {Cores.VERDE}🔥 CÓDIGO RECEBIDO: {cod1}{Cores.RESET}")
+            page.ele('#authnumber').input(cod1)
+            time.sleep(1)
+            try: page.ele('text=Verificação concluída').click()
             except: pass
-            time.sleep(2)
             
-            page.ele('#password').input(senha_rag)
-            page.ele('#password2').input(senha_rag)
-            
-            btn_pais = page.ele('.page_selectBtn__XfETd')
-            if btn_pais and "Brasil" not in btn_pais.text:
-                btn_pais.click(); delay_humano(); page.ele('text=Brasil').click()
-            
-            page.ele('#firstname').input(obj_email.primeiro_nome.capitalize())
-            page.ele('#lastname').input(sobrenome)
+            senha = gerar_senha_ragnarok()
+            page.ele('#password').input(senha)
+            page.ele('#password2').input(senha)
+            try:
+                page.ele('.page_selectBtn__XfETd').click()
+                page.ele('text=Brasil').click()
+            except: pass
+            page.ele('#firstname').input(obj.primeiro_nome.capitalize())
+            page.ele('#lastname').input(CONF.get("sobrenome_padrao", "Silva"))
             page.ele('#birthday').input("01/01/1995")
-            delay_humano()
-
             page.scroll.to_bottom()
             try:
                 page.run_js("document.getElementById('terms1').click()")
                 page.run_js("document.getElementById('terms2').click()")
-            except:
-                if page.ele('#terms1'): page.ele('#terms1').click()
-                if page.ele('#terms2'): page.ele('#terms2').click()
-            delay_humano()
-
+            except: pass
+            
             if not clicar_com_seguranca(page, '.page_submitBtn__hk_C0', "Botão CONTINUAR"):
                  if not clicar_com_seguranca(page, 'text=CONTINUAR', "Botão CONTINUAR"): return False
             
@@ -474,7 +409,8 @@ def criar_uma_conta_com_retry(page):
             
             # --- LOGIN ---
             log_info("Fazendo Login...")
-            if page.wait.ele_displayed('text=Entrar', timeout=TIMEOUT_PADRAO):
+            # Verifica se já temos o botão de login, se não navega
+            if page.ele('text=Entrar'):
                 clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar")
             else:
                 page.get("https://login.gnjoylatam.com")
@@ -482,22 +418,36 @@ def criar_uma_conta_com_retry(page):
             page.wait.url_change('login', timeout=TIMEOUT_PADRAO)
             vencer_cloudflare(page, checar_cookies=False)
             
-            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj_email.email)
+            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj.email)
             delay_humano()
-            page.ele('#password').input(senha_rag)
+            page.ele('#password').input(senha)
             delay_humano()
             clicar_com_seguranca(page, 'text=CONTINUAR', "Login")
             
             page.wait.url_change('login.gnjoylatam.com', timeout=30)
             
-            # --- OTP ---
-            if not page.wait.ele_displayed('.header_mypageBtn__cR1p3', timeout=TIMEOUT_PADRAO):
-                 page.get("https://www.gnjoylatam.com/pt")
-                 if not page.wait.ele_displayed('.header_mypageBtn__cR1p3', timeout=TIMEOUT_PADRAO):
-                     return False
+            # --- OTP (COM LOGIN DE RESGATE) ---
+            page.get("https://www.gnjoylatam.com/pt")
+            
+            # >>> LÓGICA DE RESGATE: Se não tiver Perfil (ou seja, não logou), tenta logar de novo
+            if not page.ele('.header_mypageBtn__cR1p3') and (page.ele('text=Login') or page.ele('text=Entrar')):
+                log_aviso("Sessão perdida. Tentando login de resgate...")
+                if clicar_com_seguranca(page, 'text=Login', "Botão Login") or clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar"):
+                    page.wait.url_change('login', timeout=15)
+                    vencer_cloudflare(page, False)
+                    page.ele('#email').input(obj.email)
+                    page.ele('#password').input(senha)
+                    clicar_com_seguranca(page, 'text=CONTINUAR', "Login")
+                    time.sleep(5)
+                    page.get("https://www.gnjoylatam.com/pt")
 
-            clicar_com_seguranca(page, '.header_mypageBtn__cR1p3', "Perfil")
-            clicar_com_seguranca(page, 'text=Conexão OTP', "Menu OTP")
+            # Agora tenta seguir fluxo normal
+            if not clicar_com_seguranca(page, '.header_mypageBtn__cR1p3', "Perfil"):
+                log_erro("Falha crítica: Não logou após cadastro.")
+                # Não retorna False aqui para não trocar de email, apenas falha essa tentativa
+                continue 
+
+            if not clicar_com_seguranca(page, 'text=Conexão OTP', "Menu OTP"): continue
             
             seletores = ['text:Solicitação de serviço OTP', '.page_otp_join_btn__KKBJq']
             clicou = False
@@ -507,12 +457,23 @@ def criar_uma_conta_com_retry(page):
             
             if not clicou: return False
                 
-            # 3. AGUARDAR CÓDIGO OTP (Universal)
-            codigo2 = aguardar_codigo_universal(obj_email, provider_instancia, filtro_assunto="OTP")
-            if not codigo2: return False 
+            # 3. AGUARDAR CÓDIGO OTP
+            print(f"   {Cores.CIANO}⏳ Aguardando e-mail (OTP) em {obj.provider_name}...{Cores.RESET}", end="", flush=True)
+            cod2 = None
+            start_wait = time.time()
+            while time.time() - start_wait < 50:
+                print(".", end="", flush=True)
+                val = prov.esperar_codigo(obj, "OTP")
+                if val:
+                    cod_extraido = extrair_codigo_seguro(val)
+                    if cod_extraido: cod2 = cod_extraido; break
+                time.sleep(4)
+
+            if not cod2: return False
+            print(f"\n   {Cores.VERDE}🔥 CÓDIGO RECEBIDO: {cod2}{Cores.RESET}")
             
             page.wait.ele_displayed('#authnumber', timeout=TIMEOUT_PADRAO)
-            page.ele('#authnumber').input(codigo2)
+            page.ele('#authnumber').input(cod2)
             delay_humano()
             
             clicar_com_seguranca(page, 'text=Verificação concluída', "Validar OTP")
@@ -533,42 +494,40 @@ def criar_uma_conta_com_retry(page):
                             i.input(codigo_app); break
                     delay_humano()
                     
-                    seletores_conf = ['.page_otp_key_cert_btn__Puava', 'text=Confirme']
-                    for sel in seletores_conf:
-                        if clicar_com_seguranca(page, sel, "Confirme"): break
-                    
-                    seletores_ok = ['.alert_confirm__79LSd', 'text=OK', 'tag:button@@text()=OK']
-                    achou_ok = False
-                    for sel in seletores_ok:
-                        if page.wait.ele_displayed(sel, timeout=10):
-                            time.sleep(1)
-                            try: page.ele(sel).click()
-                            except: pass
-                            achou_ok = True; break
-                    
-                    status = "PRONTA_PARA_FARMAR" if achou_ok else "VERIFICAR_MANUALMENTE"
-                    salvar_conta_backup(obj_email.email, senha_rag, seed_text, status)
-                    consolidar_conta_no_principal(obj_email.email, senha_rag)
-                    return True # SUCESSO TOTAL
+                    if clicar_com_seguranca(page, 'text=Confirme', "Confirme"):
+                        achou_ok = False
+                        if clicar_com_seguranca(page, 'text=OK', "OK"): achou_ok = True
+                        
+                        status = "PRONTA_PARA_FARMAR" if achou_ok else "VERIFICAR_MANUALMENTE"
+                        salvar_conta_backup(obj.email, senha, seed_text, status)
+                        consolidar_conta_no_principal(obj.email, senha)
+                        return True
                 else:
-                    salvar_conta_backup(obj_email.email, senha_rag, seed_text, status="FALTA_ATIVAR_APP")
+                    salvar_conta_backup(obj.email, senha, seed_text, status="FALTA_ATIVAR_APP")
                     return True
             else:
                 return False
 
         except Exception as e:
             log_erro(f"Erro no processo: {e}")
-            return False # Falha genérica
+            return False 
             
-    return False # Falhou todas as tentativas
+    return False
 
-# --- MAIN ATUALIZADA ---
+# --- FUNÇÃO TRAMPOLIM ---
+def verificar_licenca_online(tipo):
+    try:
+        from master import verificar_licenca_online as v
+        return v(tipo)
+    except: return True
+
+# --- MAIN ---
 def main():
     if not verificar_licenca_online("fabricador"): 
         return
 
-    print(f"\n{Cores.CIANO}>>> FÁBRICA DE CONTAS PREMIUM (Multi-Provider){Cores.RESET}")
-    try: qtd = int(input("\nQuantas contas deseja criar? ").strip())
+    print(f"\n{Cores.CIANO}>>> FÁBRICA DE CONTAS PREMIUM{Cores.RESET}")
+    try: qtd = int(input("\nQuantas contas deseja criar? (Recomendamos no máximo 10 por execução): ").strip())
     except: qtd = 1
     
     if qtd > 15:
@@ -586,8 +545,7 @@ def main():
     for i in range(qtd):
         print(f"\n{Cores.NEGRITO}=== CONTA {i+1} DE {qtd} ==={Cores.RESET}")
         
-        # CHAMA A NOVA FUNÇÃO COM RETRY MULTI-PROVIDER
-        if criar_uma_conta_com_retry(page):
+        if criar_conta(page):
             sucessos += 1
             print(f"{Cores.VERDE}✅ Sucesso na conta {i+1}!{Cores.RESET}")
         else:
