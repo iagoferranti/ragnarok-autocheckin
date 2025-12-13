@@ -175,29 +175,41 @@ def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
     log_erro(f"Falha ao clicar em {nome_elemento}.")
     return False
 
+# --- BYPASS CLOUDFLARE RIGOROSO (V51) ---
 def vencer_cloudflare(page, checar_cookies=True):
+    """
+    Verifica Cloudflare com as classes específicas do Ragnarok e delay de segurança.
+    """
     if checar_cookies: fechar_cookies(page)
     
-    if page.ele('.page_success__gilOx') or page.ele('text:concluída') or page.ele('#email') or page.ele('.turnstile_success__Z3Tot'):
+    # 1. Verifica SUCESSO IMEDIATO (Sua classe descoberta)
+    if page.ele('.page_success__gilOx') or page.ele('.turnstile_success__Z3Tot') or page.ele('text:Verificação de segurança para acesso concluída'):
+        # Delay de segurança para garantir que o JS do site processou o sucesso
+        time.sleep(2)
         return
 
-    ele_check = page.ele('text=Confirme que é humano') or page.ele('.cb-lb') or page.ele('text=Verificando segurança')
-    if ele_check:
+    # 2. Se não achou sucesso, procura bloqueio para resolver
+    ele_bloqueio = page.ele('text=Verificando segurança') or page.ele('text=Confirme que é humano') or page.ele('.cb-lb')
+    
+    if ele_bloqueio and ele_bloqueio.states.is_displayed:
         log_sistema("Resolvendo Cloudflare...")
         
-        # Tenta focar no email para forçar o captcha a reagir
+        # Tenta focar no email (se existir por baixo) para acordar o captcha
         if page.ele('#email'):
             try:
-                page.ele('#email').click(); time.sleep(0.3)
-                page.actions.key_down(Keys.SHIFT).tap(Keys.TAB).key_up(Keys.SHIFT)
-                time.sleep(3)
+                page.ele('#email').click()
+                time.sleep(0.3)
+                page.actions.key_down(Keys.SHIFT).tap(Keys.TAB).key_up(Keys.SHIFT) # Volta foco
+                time.sleep(2)
             except: pass
-            
-        time.sleep(2)
+        
         try: 
             page.ele('tag:body').click()
-            time.sleep(4)
+            time.sleep(2)
         except: pass
+        
+        # Espera extra para ver se o sucesso aparece depois da interação
+        time.sleep(3) 
 
 # --- FUNÇÃO DE LIMPEZA DE SESSÃO ---
 def garantir_logout(page):
@@ -340,8 +352,8 @@ def criar_conta(page):
         if not obj: continue
         log_sucesso(f"E-mail Gerado: {Cores.NEGRITO}{obj.email}{Cores.RESET}")
         
-        # PROCESSO CADASTRO
         try:
+            # === CADASTRO ===
             log_info("Acessando Cadastro...")
             page.get("https://member.gnjoylatam.com/pt/join")
             
@@ -350,7 +362,6 @@ def criar_conta(page):
                 log_aviso("Site demorou. Atualizando...")
                 page.refresh()
                 vencer_cloudflare(page)
-                # Tenta logout de novo caso tenha carregado a home logada
                 garantir_logout(page)
                 if not page.wait.ele_displayed('#email', timeout=20):
                     log_erro("Site não carregou.")
@@ -364,7 +375,6 @@ def criar_conta(page):
             if not clicar_com_seguranca(page, 'text=Enviar verificação', "Botão Enviar"):
                 continue 
             
-            # Espera Código
             print(f"   {Cores.CIANO}⏳ Aguardando e-mail (Cadastro) em {obj.provider_name}...{Cores.RESET}", end="", flush=True)
             cod1 = None
             start_wait = time.time()
@@ -407,16 +417,13 @@ def criar_conta(page):
             
             log_sucesso("Cadastro enviado!")
             
-            # --- LOGIN ---
+            # === LOGIN (COM RESGATE) ===
             log_info("Fazendo Login...")
-            # Verifica se já temos o botão de login, se não navega
-            if page.ele('text=Entrar'):
-                clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar")
-            else:
-                page.get("https://login.gnjoylatam.com")
+            if page.ele('text=Entrar'): clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar")
+            else: page.get("https://login.gnjoylatam.com")
                 
             page.wait.url_change('login', timeout=TIMEOUT_PADRAO)
-            vencer_cloudflare(page, checar_cookies=False)
+            vencer_cloudflare(page, False)
             
             page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj.email)
             delay_humano()
@@ -426,10 +433,10 @@ def criar_conta(page):
             
             page.wait.url_change('login.gnjoylatam.com', timeout=30)
             
-            # --- OTP (COM LOGIN DE RESGATE) ---
+            # --- OTP ---
             page.get("https://www.gnjoylatam.com/pt")
             
-            # >>> LÓGICA DE RESGATE: Se não tiver Perfil (ou seja, não logou), tenta logar de novo
+            # LÓGICA DE RESGATE: Se não tiver Perfil, tenta logar de novo
             if not page.ele('.header_mypageBtn__cR1p3') and (page.ele('text=Login') or page.ele('text=Entrar')):
                 log_aviso("Sessão perdida. Tentando login de resgate...")
                 if clicar_com_seguranca(page, 'text=Login', "Botão Login") or clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar"):
@@ -441,10 +448,8 @@ def criar_conta(page):
                     time.sleep(5)
                     page.get("https://www.gnjoylatam.com/pt")
 
-            # Agora tenta seguir fluxo normal
             if not clicar_com_seguranca(page, '.header_mypageBtn__cR1p3', "Perfil"):
                 log_erro("Falha crítica: Não logou após cadastro.")
-                # Não retorna False aqui para não trocar de email, apenas falha essa tentativa
                 continue 
 
             if not clicar_com_seguranca(page, 'text=Conexão OTP', "Menu OTP"): continue
@@ -501,7 +506,7 @@ def criar_conta(page):
                         status = "PRONTA_PARA_FARMAR" if achou_ok else "VERIFICAR_MANUALMENTE"
                         salvar_conta_backup(obj.email, senha, seed_text, status)
                         consolidar_conta_no_principal(obj.email, senha)
-                        return True
+                        return True # SUCESSO TOTAL
                 else:
                     salvar_conta_backup(obj.email, senha, seed_text, status="FALTA_ATIVAR_APP")
                     return True
@@ -527,7 +532,7 @@ def main():
         return
 
     print(f"\n{Cores.CIANO}>>> FÁBRICA DE CONTAS PREMIUM{Cores.RESET}")
-    try: qtd = int(input("\nQuantas contas deseja criar? (Recomendamos no máximo 10 por execução): ").strip())
+    try: qtd = int(input("\nQuantas contas deseja criar? (Recomendamos no máximo 10 por execução): ").strip() or "1")
     except: qtd = 1
     
     if qtd > 15:

@@ -20,8 +20,29 @@ class Cores:
     CINZA = '\033[90m'
     NEGRITO = '\033[1m'
 
+
 # ===== CONFIGURAÇÕES =====
-VERSAO_ATUAL = "1.0.2"
+def obter_versao_local():
+    """Lê a versão do arquivo version.txt embutido ou na pasta"""
+    try:
+        # Se estiver rodando como .exe (PyInstaller)
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            # Se estiver rodando como script .py normal
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        caminho_arquivo = os.path.join(base_path, "version.txt")
+        
+        if os.path.exists(caminho_arquivo):
+            with open(caminho_arquivo, "r", encoding="utf-8") as f:
+                return f.read().strip()
+    except: pass
+    return "0.0.0" # Fallback se der erro
+
+VERSAO_ATUAL = obter_versao_local() # <--- AGORA ELE LÊ DO ARQUIVO
+
+# ===== CONFIGURAÇÕES =====
 ARQUIVO_NOVAS = "novas_contas.json"
 ARQUIVO_PRINCIPAL = "accounts.json"
 ARQUIVO_CONFIG = "config.json"
