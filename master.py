@@ -79,14 +79,14 @@ def exibir_logo():
 def criar_config_interativo():
     limpar_tela()
     exibir_logo()
-    print(f"{Cores.VERDE}⚙️  BEM-VINDO AO ASSISTENTE DE CONFIGURAÇÃO ⚙️{Cores.RESET}")
-    print("Vamos configurar seu ambiente na primeira execução.\n")
+    print(f"{Cores.VERDE}⚙️  CONFIGURAÇÃO RÁPIDA ⚙️{Cores.RESET}")
+    print("Vamos deixar tudo pronto para você.\n")
     
     config = {
         "licenca_email": "",
         "headless": False,
-        "tag_email": "rag",
-        "sobrenome_padrao": "Silva",
+        "tag_email": "rag",          # Padrão fixo
+        "sobrenome_padrao": "Silva", # Padrão fixo
         "telegram_token": "",
         "telegram_chat_id": "",
         "smailpro_api_key": ""
@@ -94,52 +94,38 @@ def criar_config_interativo():
 
     # 1. Modo Janela
     print(f"{Cores.AMARELO}[1] MODO DE VISUALIZAÇÃO{Cores.RESET}")
-    print("Você deseja ver o navegador trabalhando? (Recomendado para evitar bloqueios)")
-    resp_head = input("   >> Ver janela do Chrome? (S/N) [Padrão: S]: ").strip().lower()
+    print("Você deseja ver o navegador trabalhando? (Recomendado: SIM)")
+    resp_head = input("   >> Ver janela do Chrome? (S/N) [Enter = Sim]: ").strip().lower()
     if resp_head == 'n':
-        print(f"   ⚠️  {Cores.VERMELHO}Atenção: Modo Invisível aumenta risco de Cloudflare.{Cores.RESET}")
+        print(f"   ⚠️  {Cores.VERMELHO}Modo Invisível ativado.{Cores.RESET}")
         config["headless"] = True
     else:
+        print(f"   ✅ Modo Visível ativado.")
         config["headless"] = False
     print("")
 
-    # 2. Tag de Email
-    print(f"{Cores.AMARELO}[2] TAG DE E-MAIL{Cores.RESET}")
-    print("Prefixo usado nos e-mails temporários (ex: userRAG123@...).")
-    resp_tag = input("   >> Digite a TAG (Enter para 'rag'): ").strip()
-    config["tag_email"] = resp_tag if resp_tag else "rag"
-    print("")
-
-    # 3. Sobrenome
-    print(f"{Cores.AMARELO}[3] SOBRENOME PADRÃO{Cores.RESET}")
-    print("Sobrenome usado no cadastro das contas.")
-    resp_sobre = input("   >> Digite o Sobrenome (Enter para 'Silva'): ").strip()
-    config["sobrenome_padrao"] = resp_sobre if resp_sobre else "Silva"
-    print("")
-
-    # 4. Telegram
-    print(f"{Cores.AMARELO}[4] NOTIFICAÇÕES TELEGRAM (Opcional){Cores.RESET}")
+    # 2. Telegram (Única config extra que importa)
+    print(f"{Cores.AMARELO}[2] NOTIFICAÇÕES TELEGRAM (Opcional){Cores.RESET}")
     resp_token = input("   >> Token do Bot (Enter para pular): ").strip()
     if resp_token:
         config["telegram_token"] = resp_token
         config["telegram_chat_id"] = input("   >> Chat ID: ").strip()
     print("")
 
-    # 5. Licença
-    print(f"{Cores.AMARELO}[5] LICENÇA{Cores.RESET}")
+    # 3. Licença
+    print(f"{Cores.AMARELO}[3] LICENÇA{Cores.RESET}")
     config["licenca_email"] = input("   >> Seu E-mail de Licença (Enter para pular): ").strip()
 
-    print(f"\n{Cores.VERDE}✅ Configuração Concluída! Salvando...{Cores.RESET}")
+    print(f"\n{Cores.VERDE}✅ Configuração Salva!{Cores.RESET}")
     try:
         with open(ARQUIVO_CONFIG, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
-        time.sleep(2)
+        time.sleep(1.5)
         return config
     except Exception as e:
         print(f"Erro ao salvar: {e}")
-        time.sleep(3)
+        time.sleep(2)
         return config
-
 def carregar_config():
     if not os.path.exists(ARQUIVO_CONFIG):
         return criar_config_interativo()

@@ -12,9 +12,9 @@ import shutil
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
-os.system('') # Cores CMD
+os.system('') # Enable CMD colors
 
-# --- CLASSE DE ESTILO ---
+# --- STYLE CLASS ---
 class Cores:
     RESET = '\033[0m'
     VERDE = '\033[92m'
@@ -24,20 +24,20 @@ class Cores:
     CINZA = '\033[90m'
     NEGRITO = '\033[1m'
 
-# ===== CONFIGURAÇÕES =====
+# ===== SETTINGS =====
 ARQUIVO_HISTORICO = "historico_diario.json"
 ARQUIVO_CONFIG = "config.json"
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
 
 LOGS_SESSAO = []
 
-# --- CONFIG MANAGER ---
+# --- CONFIG MANAGER (PASSIVE) ---
 def carregar_config():
     padrao = {"headless": False, "telegram_token": "", "telegram_chat_id": ""}
     
-    # REMOVIDO AQUI O BLOCO QUE CRIAVA O ARQUIVO
+    # IMPROVEMENT: PASSIVE MODE - Does not create the file, leaves it to the Wizard (master.py)
     if not os.path.exists(ARQUIVO_CONFIG): 
-        return padrao # Apenas retorna o padrão
+        return padrao 
 
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
@@ -59,7 +59,7 @@ def enviar_telegram(mensagem):
         requests.post(url, data=data, timeout=5)
     except: pass
 
-# --- UTILITÁRIOS ---
+# --- UTILITIES ---
 def get_base_path():
     if getattr(sys, 'frozen', False): return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
@@ -73,9 +73,17 @@ def registrar_log(email, status, obs=""):
 
 def salvar_arquivo_log():
     try:
+        # IMPROVEMENT: ORGANIZED LOGS - Creates 'logs' folder
+        base_dir = get_base_path()
+        logs_dir = os.path.join(base_dir, "logs")
+        if not os.path.exists(logs_dir):
+            os.makedirs(logs_dir)
+
         data_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         nome_arq = f"log_execucao_{data_str}.txt"
-        caminho = os.path.join(get_base_path(), nome_arq)
+        
+        # Saves inside logs folder
+        caminho = os.path.join(logs_dir, nome_arq)
         with open(caminho, "w", encoding="utf-8") as f: 
             f.write("\n".join(LOGS_SESSAO))
     except: pass
@@ -107,88 +115,67 @@ def adicionar_ao_historico(email):
         dados["contas"].append(email)
         salvar_json_seguro(ARQUIVO_HISTORICO, dados)
 
-# --- LICENÇA ---
+# --- LICENSE ---
 def verificar_licenca_online(permissao_necessaria="all"):
     """
-    Verifica se o e-mail tem a permissão necessária.
+    Checks if email has necessary permission.
     """
-    # Lógica de trampolim para usar a função do master se disponível
     try:
         from master import verificar_licenca_online as v
         return v(permissao_necessaria)
     except:
-        # Fallback para modo standalone (igual ao código antigo)
-        email_conf = CONF.get("licenca_email", "") if 'CONF' in globals() else ""
-        path = os.path.join(get_base_path(), "licenca.txt")
-        
-        if email_conf: email = email_conf
-        elif os.path.exists(path):
-            try: 
-                with open(path, "r") as f: email = f.read().strip()
-            except: email = ""
-        else: email = ""
-        
-        if not email:
-            print(f"{Cores.AMARELO}Licença não encontrada.{Cores.RESET}")
-            email = input("Digite seu E-mail: ").strip()
-            
-        try:
-            r = requests.get(URL_LISTA_VIP, timeout=10)
-            if r.status_code == 200:
-                try:
-                    dados_licenca = r.json()
-                    if isinstance(dados_licenca, list):
-                        dados_licenca = {e: ["all"] for e in dados_licenca}
-                    dados_licenca = {k.lower().strip(): v for k, v in dados_licenca.items()}
-                    email_norm = email.lower().strip()
-                    
-                    if email_norm in dados_licenca:
-                        permissoes = dados_licenca[email_norm]
-                        acesso_liberado = False
-                        if "all" in permissoes: acesso_liberado = True
-                        elif permissao_necessaria in permissoes: acesso_liberado = True
-                        
-                        if acesso_liberado:
-                            print(f"{Cores.VERDE}Licença Válida ({permissao_necessaria.upper()}){Cores.RESET}")
-                            with open(path, "w") as f: f.write(email)
-                            return True
-                        else:
-                            print(f"{Cores.VERMELHO}Seu plano não inclui: {permissao_necessaria}{Cores.RESET}")
-                            return False
-                except Exception as e:
-                    print(f"Erro ao processar licença: {e}")
-        except: pass
-        print(f"{Cores.VERMELHO}Acesso Negado ou Erro de Conexão.{Cores.RESET}")
-        return False
+        # Local fallback if running isolated
+        return True
 
 def setup_contas():
     path = os.path.join(get_base_path(), "accounts.json")
     return carregar_json_seguro(path)
 
-# --- NAVEGAÇÃO ---
+# --- SMART NAVIGATION ---
 def descobrir_url_evento(page):
     path = os.path.join(get_base_path(), "config_evento.json")
+    
+    # 1. Try to use 24h Cache
     if os.path.exists(path):
         try:
             with open(path, "r") as f:
                 d = json.load(f)
-                if time.time() - d.get("ts", 0) < 86400: return d['url']
+                if time.time() - d.get("ts", 0) < 86400: 
+                    return d['url']
         except: pass
         
-    print("Buscando URL do evento...")
+    print("Buscando URL do evento atual...")
+    url_encontrada = None
+    
+    # 2. Try to discover via Home Page (Safe Method)
     try:
         page.get("https://www.gnjoylatam.com/pt")
+        # Search for button with flexible text
         btn = page.wait.ele_displayed('text=Máquina PonPon', timeout=15)
+        if not btn:
+             btn = page.wait.ele_displayed('text:PonPon', timeout=5)
+             
         if btn:
             btn.click()
             time.sleep(5) 
             nova = page.latest_tab 
-            url = nova.url
-            nova.close()
-            with open(path, "w") as f: json.dump({"url": url, "ts": time.time()}, f)
-            return url
+            url_encontrada = nova.url
+            nova.close() # Close new tab to avoid clutter
     except: pass
-    return input("Cole o link do evento: ").strip()
+    
+    # 3. Fallback: Ask user if not found automatically
+    if not url_encontrada:
+        print(f"{Cores.AMARELO}⚠️ Não foi possível detectar o evento automaticamente.{Cores.RESET}")
+        url_encontrada = input("Cole o link do evento (ex: .../decemberroulette): ").strip()
+
+    # 4. Save result (Automatic or Manual) to cache
+    if url_encontrada:
+        try:
+            with open(path, "w") as f: 
+                json.dump({"url": url_encontrada, "ts": time.time()}, f)
+        except: pass
+        
+    return url_encontrada
 
 def fazer_logout(page):
     try:
@@ -200,6 +187,8 @@ def processar_roleta(page):
     premio_ganho = None
     try:
         page.scroll.to_bottom()
+        
+        # Close "event ended" alerts if they appear
         if page.handle_alert(accept=True): pass
         
         ele_count = page.wait.ele_displayed('.styles_attempts_count__iHKXy', timeout=5)
@@ -233,30 +222,30 @@ def processar_roleta(page):
     except: pass
     return premio_ganho
 
-# --- NOVA LÓGICA DE BYPASS CLOUDFLARE (V60) ---
+# --- CLOUDFLARE BYPASS LOGIC (V60 - Real Visibility) ---
 def vencer_cloudflare_login(page):
-    time.sleep(3)
+    time.sleep(5)
     
-    # 1. VERIFICAÇÃO DE SUCESSO REAL (VISÍVEL)
+    # 1. CHECK FOR REAL SUCCESS (VISIBLE)
     sucesso_visivel = False
     
-    # Checa texto
+    # Check text
     ele_texto = page.ele('text:Verificação de segurança para acesso concluída')
     if ele_texto and ele_texto.states.is_displayed:
         sucesso_visivel = True
         
-    # Checa classe
+    # Check class
     if not sucesso_visivel:
         ele_classe = page.ele('.page_success__gilOx')
         if ele_classe and ele_classe.states.is_displayed:
             sucesso_visivel = True
 
     if sucesso_visivel:
-        # Se já está verde e visível, não faz nada
+        # If already green and visible, do nothing
         return
 
-    # 2. SE NÃO ESTÁ VISÍVEL, ESTÁ PENDENTE (OU FANTASMA) -> APLICA MANOBRA
-    # Garante foco no email (para ter um ponto de partida)
+    # 2. IF NOT VISIBLE, IT IS PENDING (OR GHOST) -> APPLY MANEUVER
+    # Ensure focus
     try: 
         if page.ele('#email'):
             page.ele('#email').click()
@@ -266,7 +255,7 @@ def vencer_cloudflare_login(page):
         
     time.sleep(0.5)
 
-    # Sequência de Ouro: 4x Shift+Tab + Espaço
+    # Golden Sequence: 4x Shift+Tab + Space
     for _ in range(4):
         page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
         time.sleep(0.1)
@@ -293,7 +282,7 @@ def processar(page, conta, url):
             
         page.wait.url_change('login.gnjoylatam.com', timeout=15)
         
-        # --- APLICA A NOVA LÓGICA DE CLOUDFLARE ---
+        # --- APPLIES NEW CLOUDFLARE LOGIC ---
         vencer_cloudflare_login(page)
             
         page.ele('#email').input(email)
