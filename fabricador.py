@@ -36,8 +36,7 @@ def log_erro(msg): print(f"{Cores.VERMELHO}[ERRO]{Cores.RESET} {msg}")
 def log_sistema(msg): print(f"{Cores.CINZA}   >> {msg}{Cores.RESET}")
 def log_debug(msg): print(f"{Cores.CINZA}   [DEBUG] {msg}{Cores.RESET}")
 
-# --- CARREGADOR DE CONFIGURAÇÕES ---
-# --- CARREGADOR DE CONFIGURAÇÕES ---
+# --- CARREGADOR DE CONFIGURAÇÕES (PASSIVO) ---
 def carregar_config():
     config_padrao = {
         "licenca_email": "",
@@ -47,22 +46,10 @@ def carregar_config():
         "telegram_token": "",
         "telegram_chat_id": ""
     }
-    # REMOVIDO AQUI O BLOCO QUE CRIAVA O ARQUIVO (json.dump)
+    # ATENÇÃO: NÃO CRIA O ARQUIVO AQUI. DEIXA PARA O MASTER.PY (WIZARD)
     if not os.path.exists(ARQUIVO_CONFIG):
-        return config_padrao # Só retorna na memória, não cria arquivo físico
+        return config_padrao 
 
-    try:
-        with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
-            user_config = json.load(f)
-            config_padrao.update(user_config)
-            return config_padrao
-    except: return config_padrao
-    if not os.path.exists(ARQUIVO_CONFIG):
-        try:
-            with open(ARQUIVO_CONFIG, "w", encoding="utf-8") as f:
-                json.dump(config_padrao, f, indent=4)
-        except: pass
-        return config_padrao
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
             user_config = json.load(f)
@@ -235,7 +222,7 @@ def vencer_cloudflare(page, checar_cookies=True):
     # O Pulo do Gato
     page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
     
-    ##log_debug("Manobra executada. Aguardando 5s...")
+    log_debug("Manobra executada. Aguardando 5s...")
     time.sleep(5)
 
 # --- FUNÇÃO DE LIMPEZA DE SESSÃO ---
@@ -257,7 +244,7 @@ def garantir_logout(page):
             time.sleep(3)
     except: pass
 
-# ================= PROVEDORES DE E-MAIL =================
+# ================= PROVEDORES DE E-MAIL (COM ALTA ENTROPIA) =================
 
 class EmailSession:
     def __init__(self):
@@ -275,7 +262,11 @@ class ProviderGuerrilla:
         try:
             r = obj.session_requests.get("https://api.guerrillamail.com/ajax.php?f=get_email_address", timeout=10)
             data = r.json()
-            user_novo = f"{random.choice(['sam','max','leo'])}{tag}{random.randint(100,999)}"
+            
+            # ENTROPIA ALTA: Gera string aleatória de 6 caracteres (letras+numeros)
+            sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+            user_novo = f"{tag}_{sulfixo}"
+            
             r_set = obj.session_requests.get(f"https://api.guerrillamail.com/ajax.php?f=set_email_user&email_user={user_novo}&lang=en", timeout=10)
             
             if r_set.status_code == 200 and 'email_addr' in r_set.json():
@@ -308,7 +299,11 @@ class ProviderMailTM:
             doms = r.json()['hydra:member']
             coms = [d['domain'] for d in doms if d['domain'].endswith(".com")]
             domain = random.choice(coms) if coms else random.choice(doms)['domain']
-            obj.email = f"user{tag}{random.randint(1000,9999)}@{domain}"
+            
+            # ENTROPIA ALTA
+            sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+            obj.email = f"{tag}_{sulfixo}@{domain}"
+            
             requests.post("https://api.mail.tm/accounts", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
             r_tok = requests.post("https://api.mail.tm/token", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
             if r_tok.status_code == 200:
@@ -341,7 +336,11 @@ class Provider1SecMail:
                 bons = [d for d in doms if d.endswith(".com")]
                 obj.domain_1sec = random.choice(bons) if bons else "esiix.com"
             else: obj.domain_1sec = "esiix.com"
-            obj.login_1sec = f"u{tag}{random.randint(100,999)}"
+            
+            # ENTROPIA ALTA
+            sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+            obj.login_1sec = f"{tag}_{sulfixo}"
+            
             obj.email = f"{obj.login_1sec}@{obj.domain_1sec}"
             return obj
         except: return None
