@@ -75,34 +75,84 @@ def exibir_logo():
                                 {Cores.AMARELO}⚡ LATAM EDITION v{VERSAO_ATUAL} ⚡{Cores.RESET}
     """)
 
-def carregar_config():
-    config_padrao = {
+# --- WIZARD DE CONFIGURAÇÃO ---
+def criar_config_interativo():
+    limpar_tela()
+    exibir_logo()
+    print(f"{Cores.VERDE}⚙️  BEM-VINDO AO ASSISTENTE DE CONFIGURAÇÃO ⚙️{Cores.RESET}")
+    print("Vamos configurar seu ambiente na primeira execução.\n")
+    
+    config = {
         "licenca_email": "",
         "headless": False,
         "tag_email": "rag",
-        "sobrenome_padrao": "Adamantio da Silva",
+        "sobrenome_padrao": "Silva",
         "telegram_token": "",
         "telegram_chat_id": "",
         "smailpro_api_key": ""
     }
-    
+
+    # 1. Modo Janela
+    print(f"{Cores.AMARELO}[1] MODO DE VISUALIZAÇÃO{Cores.RESET}")
+    print("Você deseja ver o navegador trabalhando? (Recomendado para evitar bloqueios)")
+    resp_head = input("   >> Ver janela do Chrome? (S/N) [Padrão: S]: ").strip().lower()
+    if resp_head == 'n':
+        print(f"   ⚠️  {Cores.VERMELHO}Atenção: Modo Invisível aumenta risco de Cloudflare.{Cores.RESET}")
+        config["headless"] = True
+    else:
+        config["headless"] = False
+    print("")
+
+    # 2. Tag de Email
+    print(f"{Cores.AMARELO}[2] TAG DE E-MAIL{Cores.RESET}")
+    print("Prefixo usado nos e-mails temporários (ex: userRAG123@...).")
+    resp_tag = input("   >> Digite a TAG (Enter para 'rag'): ").strip()
+    config["tag_email"] = resp_tag if resp_tag else "rag"
+    print("")
+
+    # 3. Sobrenome
+    print(f"{Cores.AMARELO}[3] SOBRENOME PADRÃO{Cores.RESET}")
+    print("Sobrenome usado no cadastro das contas.")
+    resp_sobre = input("   >> Digite o Sobrenome (Enter para 'Silva'): ").strip()
+    config["sobrenome_padrao"] = resp_sobre if resp_sobre else "Silva"
+    print("")
+
+    # 4. Telegram
+    print(f"{Cores.AMARELO}[4] NOTIFICAÇÕES TELEGRAM (Opcional){Cores.RESET}")
+    resp_token = input("   >> Token do Bot (Enter para pular): ").strip()
+    if resp_token:
+        config["telegram_token"] = resp_token
+        config["telegram_chat_id"] = input("   >> Chat ID: ").strip()
+    print("")
+
+    # 5. Licença
+    print(f"{Cores.AMARELO}[5] LICENÇA{Cores.RESET}")
+    config["licenca_email"] = input("   >> Seu E-mail de Licença (Enter para pular): ").strip()
+
+    print(f"\n{Cores.VERDE}✅ Configuração Concluída! Salvando...{Cores.RESET}")
+    try:
+        with open(ARQUIVO_CONFIG, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4)
+        time.sleep(2)
+        return config
+    except Exception as e:
+        print(f"Erro ao salvar: {e}")
+        time.sleep(3)
+        return config
+
+def carregar_config():
     if not os.path.exists(ARQUIVO_CONFIG):
-        print(f"{Cores.CINZA}⚙️  Criando arquivo de configuração padrão...{Cores.RESET}")
-        try:
-            with open(ARQUIVO_CONFIG, "w", encoding="utf-8") as f:
-                json.dump(config_padrao, f, indent=4)
-            return config_padrao
-        except Exception as e:
-            print(f"Erro ao criar config: {e}")
-            return config_padrao
+        return criar_config_interativo()
 
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
             user_config = json.load(f)
-            config_padrao.update(user_config)
-            return config_padrao
+            # Garante chaves mínimas caso o arquivo seja antigo
+            padrao = {"headless": False, "tag_email": "rag"} 
+            padrao.update(user_config)
+            return padrao
     except:
-        return config_padrao
+        return criar_config_interativo() # Se der erro lendo, recria
 
 # --- FUNÇÕES DE AUTO UPDATE ---
 def get_base_path():
@@ -135,6 +185,12 @@ def verificar_atualizacao():
         print(f"{Cores.CINZA}(Skip update check){Cores.RESET}")
 
 def realizar_update():
+    # --- AVISO DE SEGURANÇA ---
+    print(f"\n{Cores.AMARELO}⚠️  ATENÇÃO - NÃO FECHE A JANELA:{Cores.RESET}")
+    print(f"   1. Esta tela irá {Cores.NEGRITO}piscar e fechar{Cores.RESET} em instantes.")
+    print(f"   2. Aguarde até que uma {Cores.NEGRITO}NOVA janela se abra sozinha{Cores.RESET}.")
+    print(f"   {Cores.CINZA}(Isso garante que a atualização foi aplicada){Cores.RESET}")
+    time.sleep(5)
     print(f"\n{Cores.CIANO}📥 Baixando nova versão...{Cores.RESET}")
     try:
         base_dir = get_base_path()
@@ -146,16 +202,8 @@ def realizar_update():
             for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
         
         print(f"{Cores.VERDE}✅ Download concluído!{Cores.RESET}")
-        
-        # --- MENSAGEM DE AVISO ADICIONADA ---
-        print(f"\n{Cores.AMARELO}⚠️  ATENÇÃO - NÃO FECHE A JANELA:{Cores.RESET}")
-        print(f"   1. Esta tela irá {Cores.NEGRITO}piscar e fechar{Cores.RESET} em instantes.")
-        print(f"   2. Aguarde até que uma {Cores.NEGRITO}NOVA janela se abra sozinha{Cores.RESET}.")
-        print(f"   {Cores.CINZA}(Isso garante que a atualização foi aplicada){Cores.RESET}")
-        
-        time.sleep(4) # Pausa para ler
+         
         print(f"\n{Cores.CIANO}🔄 Reiniciando...{Cores.RESET}")
-        # ------------------------------------
 
         try: base_short = get_short_path(base_dir)
         except: base_short = base_dir
@@ -211,7 +259,7 @@ def verificar_licenca_online(permissao_necessaria="all"):
                 if "all" in perms or permissao_necessaria in perms:
                     return True
     except: 
-        pass # Se der erro de rede, nega por segurança ou pode mudar pra return True se quiser liberar offline
+        pass 
         
     return False
 
