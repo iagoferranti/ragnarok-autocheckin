@@ -37,6 +37,7 @@ def log_sistema(msg): print(f"{Cores.CINZA}   >> {msg}{Cores.RESET}")
 def log_debug(msg): print(f"{Cores.CINZA}   [DEBUG] {msg}{Cores.RESET}")
 
 # --- CARREGADOR DE CONFIGURAÇÕES ---
+# --- CARREGADOR DE CONFIGURAÇÕES ---
 def carregar_config():
     config_padrao = {
         "licenca_email": "",
@@ -46,6 +47,16 @@ def carregar_config():
         "telegram_token": "",
         "telegram_chat_id": ""
     }
+    # REMOVIDO AQUI O BLOCO QUE CRIAVA O ARQUIVO (json.dump)
+    if not os.path.exists(ARQUIVO_CONFIG):
+        return config_padrao # Só retorna na memória, não cria arquivo físico
+
+    try:
+        with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
+            user_config = json.load(f)
+            config_padrao.update(user_config)
+            return config_padrao
+    except: return config_padrao
     if not os.path.exists(ARQUIVO_CONFIG):
         try:
             with open(ARQUIVO_CONFIG, "w", encoding="utf-8") as f:

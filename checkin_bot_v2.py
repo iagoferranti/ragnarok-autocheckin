@@ -34,7 +34,11 @@ LOGS_SESSAO = []
 # --- CONFIG MANAGER ---
 def carregar_config():
     padrao = {"headless": False, "telegram_token": "", "telegram_chat_id": ""}
-    if not os.path.exists(ARQUIVO_CONFIG): return padrao
+    
+    # REMOVIDO AQUI O BLOCO QUE CRIAVA O ARQUIVO
+    if not os.path.exists(ARQUIVO_CONFIG): 
+        return padrao # Apenas retorna o padrão
+
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
             user = json.load(f)

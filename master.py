@@ -176,6 +176,12 @@ def verificar_atualizacao():
                 print(f"{Cores.AMARELO}🚨 NOVA VERSÃO DISPONÍVEL: {versao_nuvem}{Cores.RESET}")
                 print(f"Sua versão: {VERSAO_ATUAL}")
                 if input("   >> Atualizar agora? (S/N): ").lower() == 's':
+                    # --- AVISO DE SEGURANÇA ---
+                    print(f"\n{Cores.AMARELO}⚠️  ATENÇÃO - NÃO FECHE A JANELA:{Cores.RESET}")
+                    print(f"   1. Esta tela irá {Cores.NEGRITO}piscar e fechar{Cores.RESET} em instantes.")
+                    print(f"   2. Aguarde até que uma {Cores.NEGRITO}NOVA janela se abra sozinha{Cores.RESET}.")
+                    print(f"   {Cores.CINZA}(Isso garante que a atualização foi aplicada){Cores.RESET}")
+                    time.sleep(10)
                     realizar_update()
                     sys.exit()
             else:
@@ -185,12 +191,6 @@ def verificar_atualizacao():
         print(f"{Cores.CINZA}(Skip update check){Cores.RESET}")
 
 def realizar_update():
-    # --- AVISO DE SEGURANÇA ---
-    print(f"\n{Cores.AMARELO}⚠️  ATENÇÃO - NÃO FECHE A JANELA:{Cores.RESET}")
-    print(f"   1. Esta tela irá {Cores.NEGRITO}piscar e fechar{Cores.RESET} em instantes.")
-    print(f"   2. Aguarde até que uma {Cores.NEGRITO}NOVA janela se abra sozinha{Cores.RESET}.")
-    print(f"   {Cores.CINZA}(Isso garante que a atualização foi aplicada){Cores.RESET}")
-    time.sleep(5)
     print(f"\n{Cores.CIANO}📥 Baixando nova versão...{Cores.RESET}")
     try:
         base_dir = get_base_path()
