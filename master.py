@@ -145,8 +145,17 @@ def realizar_update():
         with open(caminho_novo, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
         
-        print(f"{Cores.VERDE}✅ Download concluído! Reiniciando...{Cores.RESET}")
-        time.sleep(1)
+        print(f"{Cores.VERDE}✅ Download concluído!{Cores.RESET}")
+        
+        # --- MENSAGEM DE AVISO ADICIONADA ---
+        print(f"\n{Cores.AMARELO}⚠️  ATENÇÃO - NÃO FECHE A JANELA:{Cores.RESET}")
+        print(f"   1. Esta tela irá {Cores.NEGRITO}piscar e fechar{Cores.RESET} em instantes.")
+        print(f"   2. Aguarde até que uma {Cores.NEGRITO}NOVA janela se abra sozinha{Cores.RESET}.")
+        print(f"   {Cores.CINZA}(Isso garante que a atualização foi aplicada){Cores.RESET}")
+        
+        time.sleep(4) # Pausa para ler
+        print(f"\n{Cores.CIANO}🔄 Reiniciando...{Cores.RESET}")
+        # ------------------------------------
 
         try: base_short = get_short_path(base_dir)
         except: base_short = base_dir

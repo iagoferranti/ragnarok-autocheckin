@@ -34,6 +34,7 @@ def log_sucesso(msg): print(f"{Cores.VERDE}[SUCESSO]{Cores.RESET} {msg}")
 def log_aviso(msg): print(f"{Cores.AMARELO}[ALERTA]{Cores.RESET} {msg}")
 def log_erro(msg): print(f"{Cores.VERMELHO}[ERRO]{Cores.RESET} {msg}")
 def log_sistema(msg): print(f"{Cores.CINZA}   >> {msg}{Cores.RESET}")
+def log_debug(msg): print(f"{Cores.CINZA}   [DEBUG] {msg}{Cores.RESET}")
 
 # --- CARREGADOR DE CONFIGURAÇÕES ---
 def carregar_config():
@@ -148,9 +149,11 @@ def extrair_codigo_seguro(texto_bruto):
 # --- DRISSION HELPERS ---
 def fechar_cookies(page):
     try:
-        if page.ele('.cookieprivacy_btn__Pqz8U', timeout=2):
-            page.ele('.cookieprivacy_btn__Pqz8U').click()
-        elif page.ele('text=concordo.', timeout=1):
+        # Só clica se estiver visível
+        btn = page.ele('.cookieprivacy_btn__Pqz8U')
+        if btn and btn.states.is_displayed:
+            btn.click()
+        elif page.ele('text=concordo.'):
             page.ele('text=concordo.').click()
     except: pass
 
@@ -175,49 +178,54 @@ def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
     log_erro(f"Falha ao clicar em {nome_elemento}.")
     return False
 
-# --- BYPASS CLOUDFLARE PRECISO (V52) ---
+# --- BYPASS CLOUDFLARE DEFINITIVO (V60 - Lógica do Lab) ---
 def vencer_cloudflare(page, checar_cookies=True):
-    """
-    Lógica de 3 etapas:
-    1. Delay de Segurança (Wait for rendering).
-    2. Check de Status (Já está 'Sucesso'?).
-    3. Ação (Marcha Ré) apenas se necessário.
-    """
     if checar_cookies: fechar_cookies(page)
     
-    # 1. DELAY DE SEGURANÇA (Fundamental)
-    # Dá tempo do script do site rodar e atualizar o texto do widget
-    log_sistema("Analisando segurança (Aguardando)...")
-    time.sleep(3) 
+    log_sistema("Analisando Cloudflare...")
+    time.sleep(5) # Delay inicial para scripts
 
-    # 2. VERIFICAÇÃO DE SUCESSO (Classe Específica do Site)
-    # Se encontrar essa classe, está tudo verde.
-    if page.ele('.page_success__gilOx') or page.ele('text:Verificação de segurança para acesso concluída'):
-        # log_sistema("Cloudflare OK (Pré-validado).")
-        return
-
-    # 3. SE NÃO TEM SUCESSO, APLICA MARCHA RÉ
-    # Se chegou aqui, ou está "Verificando..." ou travado.
-    log_sistema("Status pendente. Aplicando técnica de foco...")
+    # 1. VERIFICAÇÃO DE SUCESSO REAL (VISÍVEL)
+    sucesso_visivel = False
     
+    # Checa texto
+    ele_texto = page.ele('text:Verificação de segurança para acesso concluída')
+    if ele_texto and ele_texto.states.is_displayed:
+        sucesso_visivel = True
+        
+    # Checa classe
+    if not sucesso_visivel:
+        ele_classe = page.ele('.page_success__gilOx')
+        if ele_classe and ele_classe.states.is_displayed:
+            sucesso_visivel = True
+
+    if sucesso_visivel:
+        log_debug(f"Status: {Cores.VERDE}SUCESSO (Confirmado e Visível).{Cores.RESET}")
+        return # Pode seguir
+
+    # 2. SE NÃO ESTÁ VISÍVEL, ESTÁ PENDENTE (OU FANTASMA)
+    log_debug(f"Status: {Cores.AMARELO}Pendente ou Fantasma Detectado. Aplicando Manobra...{Cores.RESET}")
+    
+    # Foco no elemento inicial
     if page.ele('#email'):
-        try:
-            # Clica no email e volta com Shift+Tab para acordar o widget
-            page.ele('#email').click()
-            time.sleep(0.3)
-            page.actions.key_down(Keys.SHIFT).tap(Keys.TAB).key_up(Keys.SHIFT)
-            time.sleep(4) # Espera o widget reagir
+        try: page.ele('#email').click()
         except: pass
     else:
-        # Fallback se não achar o email (ex: tela de login diferente)
-        try: 
-            page.ele('tag:body').click()
-            time.sleep(2)
+        try: page.ele('tag:body').click()
         except: pass
+        
+    time.sleep(0.5)
 
-    # Verificação Final (Opcional, mas bom para debug)
-    if page.ele('.page_success__gilOx'):
-        pass # Resolvido
+    # Sequência de Ouro: 4x Shift+Tab + Espaço
+    for _ in range(4):
+        page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
+        time.sleep(0.1)
+    
+    # O Pulo do Gato
+    page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
+    
+    ##log_debug("Manobra executada. Aguardando 5s...")
+    time.sleep(5)
 
 # --- FUNÇÃO DE LIMPEZA DE SESSÃO ---
 def garantir_logout(page):
@@ -427,7 +435,7 @@ def criar_conta(page):
             
             log_sucesso("Cadastro enviado!")
             
-            # --- LOGIN (COM RESGATE) ---
+            # === LOGIN (COM RESGATE) ===
             log_info("Fazendo Login...")
             if page.ele('text=Entrar'): clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar")
             else: page.get("https://login.gnjoylatam.com")

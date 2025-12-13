@@ -107,67 +107,55 @@ def adicionar_ao_historico(email):
 def verificar_licenca_online(permissao_necessaria="all"):
     """
     Verifica se o e-mail tem a permissão necessária.
-    permissao_necessaria: 'fabricador', 'checkin' ou 'all' (para o menu principal)
     """
-    # Configuração de Caminhos e E-mail
-    email_conf = CONF.get("licenca_email", "") if 'CONF' in globals() else ""
-    path = os.path.join(get_base_path(), "licenca.txt")
-    
-    if email_conf: email = email_conf
-    elif os.path.exists(path):
-        try: 
-            with open(path, "r") as f: email = f.read().strip()
-        except: email = ""
-    else: email = ""
-    
-    # Se não tiver e-mail, pede (apenas se for chamado interativamente, ou retorna falso)
-    if not email:
-        if 'Cores' in globals(): print(f"{Cores.AMARELO}Licença não encontrada.{Cores.RESET}")
-        else: print("Licença não encontrada.")
-        email = input("Digite seu E-mail: ").strip()
-        
+    # Lógica de trampolim para usar a função do master se disponível
     try:
-        r = requests.get(URL_LISTA_VIP, timeout=10)
-        if r.status_code == 200:
-            try:
-                # Tenta ler como o NOVO FORMATO (Dicionário)
-                dados_licenca = r.json()
-                
-                # Se for uma lista antiga (Retrocompatibilidade), converte pra dicionário full
-                if isinstance(dados_licenca, list):
-                    dados_licenca = {e: ["all"] for e in dados_licenca}
-                
-                # Normaliza chaves para minúsculo
-                dados_licenca = {k.lower().strip(): v for k, v in dados_licenca.items()}
-                email_norm = email.lower().strip()
-                
-                if email_norm in dados_licenca:
-                    permissoes = dados_licenca[email_norm]
+        from master import verificar_licenca_online as v
+        return v(permissao_necessaria)
+    except:
+        # Fallback para modo standalone (igual ao código antigo)
+        email_conf = CONF.get("licenca_email", "") if 'CONF' in globals() else ""
+        path = os.path.join(get_base_path(), "licenca.txt")
+        
+        if email_conf: email = email_conf
+        elif os.path.exists(path):
+            try: 
+                with open(path, "r") as f: email = f.read().strip()
+            except: email = ""
+        else: email = ""
+        
+        if not email:
+            print(f"{Cores.AMARELO}Licença não encontrada.{Cores.RESET}")
+            email = input("Digite seu E-mail: ").strip()
+            
+        try:
+            r = requests.get(URL_LISTA_VIP, timeout=10)
+            if r.status_code == 200:
+                try:
+                    dados_licenca = r.json()
+                    if isinstance(dados_licenca, list):
+                        dados_licenca = {e: ["all"] for e in dados_licenca}
+                    dados_licenca = {k.lower().strip(): v for k, v in dados_licenca.items()}
+                    email_norm = email.lower().strip()
                     
-                    # Lógica de Permissão
-                    acesso_liberado = False
-                    if "all" in permissoes: acesso_liberado = True
-                    elif permissao_necessaria in permissoes: acesso_liberado = True
-                    
-                    if acesso_liberado:
-                        if 'Cores' in globals(): print(f"{Cores.VERDE}Licença Válida ({permissao_necessaria.upper()}){Cores.RESET}")
-                        else: print(f"Licença Válida ({permissao_necessaria})")
+                    if email_norm in dados_licenca:
+                        permissoes = dados_licenca[email_norm]
+                        acesso_liberado = False
+                        if "all" in permissoes: acesso_liberado = True
+                        elif permissao_necessaria in permissoes: acesso_liberado = True
                         
-                        # Salva cache
-                        with open(path, "w") as f: f.write(email)
-                        return True
-                    else:
-                        if 'Cores' in globals(): print(f"{Cores.VERMELHO}Seu plano não inclui: {permissao_necessaria}{Cores.RESET}")
-                        else: print(f"Seu plano não inclui: {permissao_necessaria}")
-                        return False
-            except Exception as e:
-                print(f"Erro ao processar licença: {e}")
-                
-    except: pass
-    
-    if 'Cores' in globals(): print(f"{Cores.VERMELHO}Acesso Negado ou Erro de Conexão.{Cores.RESET}")
-    else: print("Acesso Negado ou Erro de Conexão.")
-    return False
+                        if acesso_liberado:
+                            print(f"{Cores.VERDE}Licença Válida ({permissao_necessaria.upper()}){Cores.RESET}")
+                            with open(path, "w") as f: f.write(email)
+                            return True
+                        else:
+                            print(f"{Cores.VERMELHO}Seu plano não inclui: {permissao_necessaria}{Cores.RESET}")
+                            return False
+                except Exception as e:
+                    print(f"Erro ao processar licença: {e}")
+        except: pass
+        print(f"{Cores.VERMELHO}Acesso Negado ou Erro de Conexão.{Cores.RESET}")
+        return False
 
 def setup_contas():
     path = os.path.join(get_base_path(), "accounts.json")
@@ -241,6 +229,47 @@ def processar_roleta(page):
     except: pass
     return premio_ganho
 
+# --- NOVA LÓGICA DE BYPASS CLOUDFLARE (V60) ---
+def vencer_cloudflare_login(page):
+    time.sleep(3)
+    
+    # 1. VERIFICAÇÃO DE SUCESSO REAL (VISÍVEL)
+    sucesso_visivel = False
+    
+    # Checa texto
+    ele_texto = page.ele('text:Verificação de segurança para acesso concluída')
+    if ele_texto and ele_texto.states.is_displayed:
+        sucesso_visivel = True
+        
+    # Checa classe
+    if not sucesso_visivel:
+        ele_classe = page.ele('.page_success__gilOx')
+        if ele_classe and ele_classe.states.is_displayed:
+            sucesso_visivel = True
+
+    if sucesso_visivel:
+        # Se já está verde e visível, não faz nada
+        return
+
+    # 2. SE NÃO ESTÁ VISÍVEL, ESTÁ PENDENTE (OU FANTASMA) -> APLICA MANOBRA
+    # Garante foco no email (para ter um ponto de partida)
+    try: 
+        if page.ele('#email'):
+            page.ele('#email').click()
+        else:
+            page.ele('tag:body').click()
+    except: pass
+        
+    time.sleep(0.5)
+
+    # Sequência de Ouro: 4x Shift+Tab + Espaço
+    for _ in range(4):
+        page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
+        time.sleep(0.1)
+    
+    page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
+    time.sleep(5)
+
 def processar(page, conta, url):
     email = conta['email']
     print(f"\n>>> Conta: {email}")
@@ -260,25 +289,8 @@ def processar(page, conta, url):
             
         page.wait.url_change('login.gnjoylatam.com', timeout=15)
         
-        # CLOUDFLARE
-        time.sleep(3)
-        precisa = True
-        if page.ele('.page_success__gilOx') or page.ele('text:concluída'):
-             if page.ele('text:concluída').states.is_displayed: precisa = False
-        
-        if precisa:
-            try: page.ele('tag:body').click()
-            except: pass
-            
-            if page.wait.ele_displayed('#email', timeout=5):
-                page.run_js("document.getElementById('email').focus()")
-                page.ele('#email').click()
-            
-            for _ in range(4):
-                page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
-                time.sleep(0.2)
-            page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
-            time.sleep(5)
+        # --- APLICA A NOVA LÓGICA DE CLOUDFLARE ---
+        vencer_cloudflare_login(page)
             
         page.ele('#email').input(email)
         page.ele('#password').input(conta['password'])
@@ -318,15 +330,13 @@ def processar(page, conta, url):
     fazer_logout(page)
 
 def main():
-    # Mude de verificar_licenca_online() para:
     if not verificar_licenca_online("checkin"): 
-        return # Sai da função
+        return
     print(f"\n{Cores.CIANO}>>> AUTO FARM PREMIUM{Cores.RESET}")
     
     co = ChromiumOptions()
     co.set_argument('--force-device-scale-factor=0.75')
     
-    # HEADLESS SWITCH
     if CONF.get("headless", False):
         print(f"{Cores.AMARELO}Modo Invisível Ativo.{Cores.RESET}")
         co.headless(True)
