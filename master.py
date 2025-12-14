@@ -1,66 +1,99 @@
 import os
+import sys
 import json
 import time
-import sys
 import requests
 import subprocess
 import textwrap
 import ctypes
+import shutil
+import hashlib
+import re
+
+from datetime import datetime
 
 # Habilita cores no CMD
 os.system('')
 
-# --- CLASSE DE ESTILO ---
+# --- CLASSE DE ESTILO PREMIUM ---
 class Cores:
     RESET = '\033[0m'
     VERDE = '\033[92m'
     AMARELO = '\033[93m'
     VERMELHO = '\033[91m'
     CIANO = '\033[96m'
+    AZUL = '\033[94m'
+    MAGENTA = '\033[95m'
     CINZA = '\033[90m'
     NEGRITO = '\033[1m'
+    ITALICO = '\033[3m'
 
-
-# ===== CONFIGURAÇÕES =====
-def obter_versao_local():
-    """Lê a versão do arquivo version.txt embutido ou na pasta"""
-    try:
-        # Se estiver rodando como .exe (PyInstaller)
-        if getattr(sys, 'frozen', False):
-            base_path = sys._MEIPASS
-        else:
-            # Se estiver rodando como script .py normal
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            
-        caminho_arquivo = os.path.join(base_path, "version.txt")
-        
-        if os.path.exists(caminho_arquivo):
-            with open(caminho_arquivo, "r", encoding="utf-8") as f:
-                return f.read().strip()
-    except: pass
-    return "0.0.0" # Fallback se der erro
-
-VERSAO_ATUAL = obter_versao_local() # <--- AGORA ELE LÊ DO ARQUIVO
-
-# ===== CONFIGURAÇÕES =====
+# ===== CONFIGURAÇÕES GLOBAIS =====
 ARQUIVO_NOVAS = "novas_contas.json"
 ARQUIVO_PRINCIPAL = "accounts.json"
 ARQUIVO_CONFIG = "config.json"
+ARQUIVO_HISTORICO = "historico_diario.json"
 
-# URLs CONFIGURADAS PARA SEU REPO
+# URLs DO GITHUB/GIST
 URL_VERSION_TXT = "https://raw.githubusercontent.com/iagoferranti/ragnarok-autocheckin/main/version.txt"
 URL_DOWNLOAD_EXE = "https://github.com/iagoferranti/ragnarok-autocheckin/releases/latest/download/RagnarokMasterTool.exe"
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
+URL_DOWNLOAD_SHA256 = "https://github.com/iagoferranti/ragnarok-autocheckin/releases/latest/download/RagnarokMasterTool.exe.sha256"
 
-# Importa os módulos
+def _parse_sha256_text(text: str) -> str:
+    token = (text or "").strip().split()[0]
+    return re.sub(r"[^0-9a-fA-F]", "", token).lower()
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def _download_to_file(url: str, dst: str, timeout=(5, 60)):
+    with requests.get(url, stream=True, timeout=timeout) as r:
+        r.raise_for_status()
+        with open(dst, "wb") as f:
+            for chunk in r.iter_content(65536):
+                if chunk:
+                    f.write(chunk)
+
+def _norm_ver(v: str):
+    nums = re.findall(r"\d+", v or "")
+    return tuple(int(n) for n in nums[:4]) if nums else (0,)
+
+def _is_newer_version(local, cloud):
+    return _norm_ver(cloud) > _norm_ver(local)
+
+
+# --- OBTENÇÃO DE VERSÃO ---
+def obter_versao_local():
+    try:
+        base_path = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        caminho = os.path.join(base_path, "version.txt")
+        if os.path.exists(caminho):
+            with open(caminho, "r", encoding="utf-8") as f: return f.read().strip()
+    except: pass
+    return "2.0.0"
+
+VERSAO_ATUAL = obter_versao_local()
+
+# --- DEFINIR TÍTULO DA JANELA (PREMIUM) ---
+def definir_titulo():
+    if os.name == 'nt':
+        ctypes.windll.kernel32.SetConsoleTitleW(f"Ragnarok Master Tool v{VERSAO_ATUAL} | Premium Edition")
+
+# --- IMPORTAÇÃO SEGURA ---
 try:
     import fabricador
     import checkin_bot_v2
-except ImportError:
-    print(f"{Cores.VERMELHO}❌ ERRO CRÍTICO:{Cores.RESET} Módulos 'fabricador.py' ou 'checkin_bot_v2.py' não encontrados.")
-    input("Enter para sair...")
-    sys.exit()
+    MODULOS_OK = True
+except ImportError as e:
+    MODULOS_OK = False
+    ERRO_MODULO = str(e)
 
+# --- VISUAL ---
 def limpar_tela():
     os.system('cls' if os.name == 'nt' else 'clear')
 
@@ -74,73 +107,67 @@ def exibir_logo():
     ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝     ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
                                 {Cores.AMARELO}⚡ LATAM EDITION v{VERSAO_ATUAL} ⚡{Cores.RESET}
     """)
+    print(f"{Cores.CINZA}    Desenvolvido por: {Cores.MAGENTA}{Cores.NEGRITO}Iago Ferranti{Cores.RESET}\n")
 
-# --- WIZARD DE CONFIGURAÇÃO ---
+# --- CONFIGURAÇÃO (WIZARD UNIFICADO) ---
 def criar_config_interativo():
     limpar_tela()
     exibir_logo()
-    print(f"{Cores.VERDE}⚙️  CONFIGURAÇÃO RÁPIDA ⚙️{Cores.RESET}")
-    print("Vamos deixar tudo pronto para você.\n")
+    print(f"{Cores.VERDE}⚙️  CONFIGURAÇÃO INICIAL{Cores.RESET}")
+    print(f"{Cores.CINZA}Vamos configurar seu ambiente de trabalho.\n{Cores.RESET}")
     
     config = {
         "licenca_email": "",
         "headless": False,
-        "tag_email": "rag",          # Padrão fixo
-        "sobrenome_padrao": "Silva", # Padrão fixo
+        "tag_email": "rag",
+        "sobrenome_padrao": "Silva",
         "telegram_token": "",
-        "telegram_chat_id": "",
-        "smailpro_api_key": ""
+        "telegram_chat_id": ""
     }
 
-    # 1. Modo Janela
-    print(f"{Cores.AMARELO}[1] MODO DE VISUALIZAÇÃO{Cores.RESET}")
-    print("Você deseja ver o navegador trabalhando? (Recomendado: SIM)")
-    resp_head = input("   >> Ver janela do Chrome? (S/N) [Enter = Sim]: ").strip().lower()
-    if resp_head == 'n':
-        print(f"   ⚠️  {Cores.VERMELHO}Modo Invisível ativado.{Cores.RESET}")
+    print(f"{Cores.AMARELO}[1] VISUALIZAÇÃO{Cores.RESET}")
+    if input("   >> Ver o navegador trabalhando? (S/N) [Padrão: Sim]: ").lower() == 'n':
+        print(f"   ⚠️  {Cores.CINZA}Modo Invisível (Headless) ativado.{Cores.RESET}")
         config["headless"] = True
     else:
-        print(f"   ✅ Modo Visível ativado.")
+        print(f"   ✅ {Cores.CINZA}Modo Visível ativado.{Cores.RESET}")
         config["headless"] = False
     print("")
 
-    # 2. Telegram (Única config extra que importa)
-    print(f"{Cores.AMARELO}[2] NOTIFICAÇÕES TELEGRAM (Opcional){Cores.RESET}")
-    resp_token = input("   >> Token do Bot (Enter para pular): ").strip()
-    if resp_token:
-        config["telegram_token"] = resp_token
+    print(f"{Cores.AMARELO}[2] TELEGRAM (Opcional){Cores.RESET}")
+    tk = input("   >> Token do Bot: ").strip()
+    if tk:
+        config["telegram_token"] = tk
         config["telegram_chat_id"] = input("   >> Chat ID: ").strip()
     print("")
 
-    # 3. Licença
     print(f"{Cores.AMARELO}[3] LICENÇA{Cores.RESET}")
-    config["licenca_email"] = input("   >> Seu E-mail de Licença (Enter para pular): ").strip()
+    config["licenca_email"] = input("   >> E-mail da Licença: ").strip()
 
-    print(f"\n{Cores.VERDE}✅ Configuração Salva!{Cores.RESET}")
     try:
         with open(ARQUIVO_CONFIG, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
+        print(f"\n{Cores.VERDE}✅ Configuração salva com sucesso!{Cores.RESET}")
         time.sleep(1.5)
-        return config
-    except Exception as e:
-        print(f"Erro ao salvar: {e}")
-        time.sleep(2)
-        return config
+    except: pass
+    return config
+
 def carregar_config():
     if not os.path.exists(ARQUIVO_CONFIG):
         return criar_config_interativo()
-
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
-            user_config = json.load(f)
-            # Garante chaves mínimas caso o arquivo seja antigo
-            padrao = {"headless": False, "tag_email": "rag"} 
-            padrao.update(user_config)
+            d = json.load(f)
+            # Garante campos mínimos
+            padrao = {"headless": False, "tag_email": "rag", "sobrenome_padrao": "Silva"}
+            padrao.update(d)
             return padrao
     except:
-        return criar_config_interativo() # Se der erro lendo, recria
+        return criar_config_interativo()
 
-# --- FUNÇÕES DE AUTO UPDATE ---
+CONF = carregar_config()
+
+# --- UTILS ---
 def get_base_path():
     if getattr(sys, 'frozen', False): return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
@@ -150,85 +177,82 @@ def get_short_path(path):
     ctypes.windll.kernel32.GetShortPathNameW(path, buffer, 1024)
     return buffer.value
 
+# --- UPDATE SYSTEM ---
 def verificar_atualizacao():
-    if not getattr(sys, 'frozen', False): return
+    if not getattr(sys, 'frozen', False):
+        return
 
-    print(f"\n{Cores.CIANO}🔄 Verificando atualizações...{Cores.RESET}")
+    print(f"{Cores.CINZA}🔄 Conectando ao servidor de atualizações...{Cores.RESET}")
     try:
-        r = requests.get(URL_VERSION_TXT, timeout=5)
-        if r.status_code == 200:
-            versao_nuvem = r.text.strip()
-            if versao_nuvem != VERSAO_ATUAL:
-                print(f"{Cores.AMARELO}🚨 NOVA VERSÃO DISPONÍVEL: {versao_nuvem}{Cores.RESET}")
-                print(f"Sua versão: {VERSAO_ATUAL}")
-                if input("   >> Atualizar agora? (S/N): ").lower() == 's':
-                    # --- AVISO DE SEGURANÇA ---
-                    print(f"\n{Cores.AMARELO}⚠️  ATENÇÃO - NÃO FECHE A JANELA:{Cores.RESET}")
-                    print(f"   1. Esta tela irá {Cores.NEGRITO}piscar e fechar{Cores.RESET} em instantes.")
-                    print(f"   2. Aguarde até que uma {Cores.NEGRITO}NOVA janela se abra sozinha{Cores.RESET}.")
-                    print(f"   {Cores.CINZA}(Isso garante que a atualização foi aplicada){Cores.RESET}")
-                    time.sleep(10)
-                    realizar_update()
-                    sys.exit()
-            else:
-                print(f"{Cores.VERDE}✅ Sistema atualizado.{Cores.RESET}")
-                time.sleep(1)
-    except:
-        print(f"{Cores.CINZA}(Skip update check){Cores.RESET}")
+        r = requests.get(URL_VERSION_TXT, timeout=(5, 10))
+        r.raise_for_status()
+        versao_nuvem = r.text.strip()
+
+        if _is_newer_version(VERSAO_ATUAL, versao_nuvem):
+            print(f"\n{Cores.AMARELO}🚨 NOVA VERSÃO DISPONÍVEL: {versao_nuvem}{Cores.RESET}")
+            if input("   >> Atualizar agora? (S/N): ").lower() == 's':
+                realizar_update()
+        else:
+            print(f"{Cores.VERDE}✅ Sistema atualizado.{Cores.RESET}")
+            time.sleep(0.5)
+    except Exception as e:
+        print(f"{Cores.CINZA}⚠️ Falha ao verificar update ({e}){Cores.RESET}")
 
 def realizar_update():
-    print(f"\n{Cores.CIANO}📥 Baixando nova versão...{Cores.RESET}")
+    print(f"\n{Cores.CIANO}📥 Baixando atualização...{Cores.RESET}")
+
+    base_dir = get_base_path()
+    exe_atual = os.path.abspath(sys.executable)
+    nome_exe = os.path.basename(exe_atual)
+
+    temp_exe = os.path.join(base_dir, "update_temp.exe")
+    temp_sha = os.path.join(base_dir, "update_temp.sha256")
+    backup = os.path.join(base_dir, f"{nome_exe}.old")
+
     try:
-        base_dir = get_base_path()
-        nome_exe = os.path.basename(sys.executable)
-        caminho_novo = os.path.join(base_dir, "update_temp.exe")
+        _download_to_file(URL_DOWNLOAD_EXE, temp_exe, timeout=(5, 120))
+        _download_to_file(URL_DOWNLOAD_SHA256, temp_sha, timeout=(5, 30))
 
-        r = requests.get(URL_DOWNLOAD_EXE, stream=True)
-        with open(caminho_novo, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
-        
-        print(f"{Cores.VERDE}✅ Download concluído!{Cores.RESET}")
-         
-        print(f"\n{Cores.CIANO}🔄 Reiniciando...{Cores.RESET}")
+        if os.path.getsize(temp_exe) < 200_000:
+            raise RuntimeError("Arquivo suspeito (muito pequeno)")
 
-        try: base_short = get_short_path(base_dir)
-        except: base_short = base_dir
-        
+        with open(temp_sha, "r", encoding="utf-8") as f:
+            esperado = _parse_sha256_text(f.read())
+
+        obtido = _sha256_file(temp_exe)
+        if obtido != esperado:
+            raise RuntimeError("SHA256 inválido")
+
         bat_script = textwrap.dedent(f"""
             @echo off
-            chcp 65001 >NUL
             timeout /t 2 >NUL
-            taskkill /PID {os.getpid()} /F > NUL 2>&1
-            :LOOP
-            del "{nome_exe}" > NUL 2>&1
-            if exist "{nome_exe}" (timeout /t 1 >NUL & goto LOOP)
-            ren "update_temp.exe" "{nome_exe}"
-            cd /d "{base_short}"
-            start "" "{nome_exe}"
-            del "%~f0" & exit
+            copy /Y "{exe_atual}" "{backup}" >NUL
+            del /F /Q "{exe_atual}" >NUL
+            move /Y "{temp_exe}" "{exe_atual}" >NUL
+            start "" "{exe_atual}"
+            del "%~f0"
         """)
-        
+
         bat_path = os.path.join(base_dir, "updater.bat")
-        with open(bat_path, "w") as f: f.write(bat_script)
-        subprocess.Popen([bat_path], shell=True)
+        with open(bat_path, "w", encoding="utf-8") as f:
+            f.write(bat_script)
+
+        subprocess.Popen([bat_path], shell=True, cwd=base_dir)
+        sys.exit()
+
     except Exception as e:
-        print(f"{Cores.VERMELHO}Erro update: {e}{Cores.RESET}")
-        input()
+        print(f"{Cores.VERMELHO}❌ Update falhou: {e}{Cores.RESET}")
+        input("Enter para continuar...")
 
-# --- SISTEMA DE LOGIN E VERIFICAÇÃO ---
 
-def verificar_licenca_online(permissao_necessaria="all"):
-    """
-    Função acessada pelos módulos externos para validar a licença silenciosamente.
-    Lê o e-mail do arquivo local e valida no Gist.
-    """
-    path_licenca = "licenca.txt"
+# --- LICENÇA & AUTH ---
+def verificar_licenca_online(permissao="all"):
+    """Valida silenciosamente para uso nos módulos"""
+    path = "licenca.txt"
     email = ""
-    
-    # Tenta ler o email salvo
-    if os.path.exists(path_licenca):
+    if os.path.exists(path):
         try: 
-            with open(path_licenca, "r") as f: email = f.read().strip()
+            with open(path, "r") as f: email = f.read().strip()
         except: pass
     
     if not email: return False
@@ -240,20 +264,18 @@ def verificar_licenca_online(permissao_necessaria="all"):
             if isinstance(dados, list): dados = {e: ["all"] for e in dados}
             dados = {k.lower().strip(): v for k, v in dados.items()}
             
-            if email.lower().strip() in dados:
-                perms = dados[email.lower().strip()]
-                if "all" in perms or permissao_necessaria in perms:
-                    return True
-    except: 
-        pass 
-        
+            perms = dados.get(email.lower().strip())
+            if perms and ("all" in perms or permissao in perms):
+                return True
+    except: pass
     return False
 
 def autenticar_usuario():
     limpar_tela()
     exibir_logo()
-    print(f"{Cores.NEGRITO}🔒 ÁREA RESTRITA - AUTENTICAÇÃO{Cores.RESET}\n")
+    print(f"{Cores.NEGRITO}🔒 ÁREA RESTRITA{Cores.RESET}\n")
 
+    # Tenta ler licença salva ou do config
     config = carregar_config()
     email = config.get("licenca_email", "")
     path_licenca = "licenca.txt"
@@ -264,157 +286,172 @@ def autenticar_usuario():
         except: pass
     
     if not email:
-        email = input("✉️  Digite seu E-mail de Licença: ").strip()
+        email = input("✉️  E-mail de Acesso: ").strip()
     else:
-        print(f"👤 Usuário detectado: {Cores.AMARELO}{email}{Cores.RESET}")
-        print("⏳ Verificando permissões online...")
+        print(f"👤 Usuário: {Cores.AMARELO}{email}{Cores.RESET}")
+        print("⏳ Autenticando no servidor...")
 
     try:
         r = requests.get(URL_LISTA_VIP, timeout=10)
         if r.status_code != 200:
-            print(f"\n{Cores.VERMELHO}❌ Erro de conexão.{Cores.RESET}")
+            print(f"\n{Cores.VERMELHO}❌ Servidor offline.{Cores.RESET}")
             return None, None
 
-        try:
-            dados_licenca = r.json()
-            if isinstance(dados_licenca, list):
-                dados_licenca = {e: ["all"] for e in dados_licenca}
-            
-            dados_licenca = {k.lower().strip(): v for k, v in dados_licenca.items()}
-            email_norm = email.lower().strip()
+        dados = r.json()
+        # Normalização para suportar lista antiga ou dict novo
+        if isinstance(dados, list): dados = {e: ["all"] for e in dados}
+        dados = {k.lower().strip(): v for k, v in dados.items()}
+        
+        email_norm = email.lower().strip()
 
-            if email_norm in dados_licenca:
-                permissoes = dados_licenca[email_norm]
-                with open(path_licenca, "w") as f: f.write(email_norm)
-                print(f"\n{Cores.VERDE}✅ Acesso Liberado! Plano: {str(permissoes).upper()}{Cores.RESET}")
-                time.sleep(1.5)
-                return email_norm, permissoes
-            else:
-                print(f"\n{Cores.VERMELHO}⛔ Sem licença ativa.{Cores.RESET}")
-                if os.path.exists(path_licenca): os.remove(path_licenca)
-                
-        except json.JSONDecodeError:
-            print(f"\n{Cores.VERMELHO}❌ Erro no banco de dados.{Cores.RESET}")
+        if email_norm in dados:
+            perms = dados[email_norm]
+            with open(path_licenca, "w") as f: f.write(email_norm)
+            
+            plano = "MASTER" if "all" in perms else "BÁSICO"
+            print(f"\n{Cores.VERDE}✅ Acesso Liberado! Plano: {plano}{Cores.RESET}")
+            time.sleep(1)
+            return email_norm, perms
+        else:
+            print(f"\n{Cores.VERMELHO}⛔ Licença não encontrada ou expirada.{Cores.RESET}")
+            if os.path.exists(path_licenca): os.remove(path_licenca)
             
     except Exception as e:
-        print(f"\n{Cores.VERMELHO}❌ Erro: {e}{Cores.RESET}")
+        print(f"\n{Cores.VERMELHO}❌ Erro de conexão: {e}{Cores.RESET}")
 
     return None, None
 
-# --- UNIFICAÇÃO ---
+# --- FERRAMENTAS EXTRAS ---
 def unificar_contas():
     limpar_tela()
     exibir_logo()
-    print(f"{Cores.AMARELO}🔄 UNIFICADOR DE CONTAS{Cores.RESET}\n")
+    print(f"{Cores.AMARELO}🔗 UNIFICADOR DE CONTAS{Cores.RESET}\n")
 
     if not os.path.exists(ARQUIVO_NOVAS):
-        print(f"⚠️ Arquivo '{ARQUIVO_NOVAS}' não encontrado.")
-        input("\nEnter para voltar...")
-        return
+        print(f"⚠️  Arquivo '{ARQUIVO_NOVAS}' vazio.")
+        time.sleep(2); return
 
     try:
-        with open(ARQUIVO_NOVAS, "r", encoding="utf-8") as f:
-            novas_raw = json.load(f)
-    except:
-        print("❌ Erro ao ler arquivo.")
-        return
+        with open(ARQUIVO_NOVAS, "r", encoding="utf-8") as f: novas = json.load(f)
+    except: return
 
-    contas_validas = [c for c in novas_raw if c.get('status') == 'PRONTA_PARA_FARMAR']
-    if not contas_validas:
-        print("⚠️ Nenhuma conta válida encontrada.")
-        input("\nEnter para voltar...")
-        return
+    # Filtra apenas contas prontas
+    validas = [c for c in novas if c.get('status') == 'PRONTA_PARA_FARMAR']
+    
+    if not validas:
+        print("⚠️  Nenhuma conta com status 'PRONTA_PARA_FARMAR' encontrada.")
+        time.sleep(2); return
 
-    print(f"   -> Processando {len(contas_validas)} contas novas...")
-
-    contas_principais = []
+    print(f"   -> Integrando {len(validas)} novas contas...")
+    
+    principais = []
     if os.path.exists(ARQUIVO_PRINCIPAL):
         try:
-            with open(ARQUIVO_PRINCIPAL, "r") as f:
-                contas_principais = json.load(f)
+            with open(ARQUIVO_PRINCIPAL, "r") as f: principais = json.load(f)
         except: pass
 
-    emails_existentes = set(c['email'] for c in contas_principais)
-    adicionadas = 0
+    existentes = set(c['email'] for c in principais)
+    count = 0
 
-    for conta in contas_validas:
-        if conta['email'] not in emails_existentes:
-            contas_principais.append({"email": conta['email'], "password": conta['password']})
-            emails_existentes.add(conta['email'])
-            adicionadas += 1
+    for c in validas:
+        if c['email'] not in existentes:
+            principais.append({"email": c['email'], "password": c['password']})
+            existentes.add(c['email'])
+            count += 1
 
-    if adicionadas > 0:
+    if count > 0:
         try:
             with open(ARQUIVO_PRINCIPAL, "w", encoding="utf-8") as f:
-                json.dump(contas_principais, f, indent=4)
-            print(f"\n{Cores.VERDE}✅ {adicionadas} contas integradas!{Cores.RESET}")
-            if input(f"\nLimpar arquivo de fabricação? (s/n): ").lower() == 's':
+                json.dump(principais, f, indent=4)
+            
+            print(f"\n{Cores.VERDE}✅ {count} Contas integradas ao banco principal!{Cores.RESET}")
+            
+            if input(f"\n   >> Limpar arquivo de fabricação? (S/N): ").lower() == 's':
                 with open(ARQUIVO_NOVAS, "w") as f: json.dump([], f)
-        except: print("Erro ao salvar.")
+                print(f"   🗑️  Arquivo temporário limpo.")
+        except: print("❌ Erro ao salvar.")
     else:
-        print("\nℹ️ Nenhuma conta nova.")
+        print("\nℹ️  Todas as contas já estavam cadastradas.")
+    
     input("\nEnter para voltar...")
 
 # --- MENU PRINCIPAL ---
 def main():
-    # 1. Autentica
-    email_usuario, permissoes = autenticar_usuario()
-    if not email_usuario:
+    definir_titulo()
+    
+    # 1. Checa Integridade
+    if not MODULOS_OK:
+        limpar_tela()
+        exibir_logo()
+        print(f"{Cores.VERMELHO}❌ ERRO CRÍTICO DE INTEGRIDADE{Cores.RESET}")
+        print(f"Não foi possível carregar os módulos do sistema.")
+        print(f"Detalhe: {ERRO_MODULO}")
         input("\nEnter para sair...")
         sys.exit()
 
-    # 2. Verifica Update
+    # 2. Login
+    email_user, perms = autenticar_usuario()
+    if not email_user:
+        time.sleep(2); sys.exit()
+
+    # 3. Update
     verificar_atualizacao()
 
+    # 4. Loop Menu
     while True:
         limpar_tela()
         exibir_logo()
-        print(f"👤 Usuário: {Cores.CIANO}{email_usuario}{Cores.RESET}")
-        print(f"🔑 Permissões: {Cores.AMARELO}{permissoes}{Cores.RESET}")
-        print("\nEscolha uma operação disponível:\n")
-
-        opcoes_validas = []
-
-        if "all" in permissoes or "fabricador" in permissoes:
-            print(f"  [1] 🏭 FABRICADOR DE CONTAS")
-            opcoes_validas.append('1')
-        else:
-            print(f"  {Cores.CINZA}[1] 🔒 Fabricador (Bloqueado){Cores.RESET}")
-
-        if "all" in permissoes or "checkin" in permissoes:
-            print(f"  [2] 🎰 AUTO FARM (Check-in + Roleta)")
-            opcoes_validas.append('2')
-        else:
-            print(f"  {Cores.CINZA}[2] 🔒 Auto Farm (Bloqueado){Cores.RESET}")
-
-        print(f"  [3] 🔗 UNIFICAR CONTAS")
-        opcoes_validas.append('3')
-        print(f"  [0] ❌ SAIR")
-        opcoes_validas.append('0')
+        print(f"👤 Licença: {Cores.CIANO}{email_user}{Cores.RESET}")
+        print(f"📅 Data: {Cores.CINZA}{datetime.now().strftime('%d/%m/%Y')}{Cores.RESET}\n")
         
-        opcao = input("\n>> Digite o número: ").strip()
+        print("Escolha uma ferramenta:\n")
 
-        if opcao not in opcoes_validas:
+        # Menu Dinâmico
+        opcoes = []
+        
+        if "all" in perms or "fabricador" in perms:
+            print(f"   {Cores.VERDE}[1]{Cores.RESET} 🏭 Fabricador de Contas")
+            opcoes.append('1')
+        else:
+            print(f"   {Cores.CINZA}[1] 🔒 Fabricador (Bloqueado){Cores.RESET}")
+
+        if "all" in perms or "checkin" in perms:
+            print(f"   {Cores.VERDE}[2]{Cores.RESET} 🎰 Auto Farm (Check-in + Roleta)")
+            opcoes.append('2')
+        else:
+            print(f"   {Cores.CINZA}[2] 🔒 Auto Farm (Bloqueado){Cores.RESET}")
+
+        print(f"   {Cores.VERDE}[3]{Cores.RESET} 🔗 Unificar Contas Novas")
+        opcoes.append('3')
+        
+        print(f"\n   {Cores.VERMELHO}[0]{Cores.RESET} Sair")
+        opcoes.append('0')
+
+        escolha = input("\n>> Opção: ").strip()
+
+        if escolha not in opcoes:
             print(f"\n{Cores.VERMELHO}Opção inválida.{Cores.RESET}")
-            time.sleep(1)
-            continue
+            time.sleep(1); continue
 
-        if opcao == '1':
+        if escolha == '1':
             limpar_tela()
             try: fabricador.executar()
-            except Exception as e: print(f"Erro: {e}"); input()
+            except Exception as e: 
+                print(f"{Cores.VERMELHO}Erro no módulo Fabricador: {e}{Cores.RESET}")
+                input()
 
-        elif opcao == '2':
+        elif escolha == '2':
             limpar_tela()
-            # Removemos a checagem porque o próprio bot agora sabe criar o arquivo!
             try: checkin_bot_v2.executar()
-            except Exception as e: print(f"Erro: {e}"); input()
+            except Exception as e:
+                print(f"{Cores.VERMELHO}Erro no módulo Auto Farm: {e}{Cores.RESET}")
+                input()
 
-        elif opcao == '3':
+        elif escolha == '3':
             unificar_contas()
 
-        elif opcao == '0':
-            print("\nAté logo! 👋")
+        elif escolha == '0':
+            print("\nEncerrando sistema...")
             time.sleep(1)
             break
 

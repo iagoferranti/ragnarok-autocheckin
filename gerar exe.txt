@@ -1,0 +1,1 @@
+pyinstaller --noconfirm --onefile --console --name "RagnarokMasterTool" --icon "icon.ico" --clean --hidden-import "fabricador" --hidden-import "checkin_bot_v2" --add-data "version.txt;." master.py

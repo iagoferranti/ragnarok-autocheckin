@@ -10,33 +10,70 @@ from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
-os.system('') # Habilita cores no CMD
+os.system('') # Enables ANSI colors in CMD
 
-# --- CONFIGURAÇÕES PADRÃO ---
+# --- DEFAULT CONFIGURATION ---
 ARQUIVO_CONFIG = "config.json"
 ARQUIVO_SALVAR = "novas_contas.json"
 ARQUIVO_PRINCIPAL = "accounts.json"
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
 TIMEOUT_PADRAO = 40 
 
-# --- CLASSE DE ESTILO ---
+# --- STYLE CLASS ---
 class Cores:
     RESET = '\033[0m'
     VERDE = '\033[92m'
     AMARELO = '\033[93m'
     VERMELHO = '\033[91m'
     CIANO = '\033[96m'
+    AZUL = '\033[94m'
+    MAGENTA = '\033[95m'
     CINZA = '\033[90m'
     NEGRITO = '\033[1m'
+    ITALICO = '\033[3m'
 
-def log_info(msg): print(f"{Cores.CIANO}[INFO]{Cores.RESET} {msg}")
-def log_sucesso(msg): print(f"{Cores.VERDE}[SUCESSO]{Cores.RESET} {msg}")
-def log_aviso(msg): print(f"{Cores.AMARELO}[ALERTA]{Cores.RESET} {msg}")
-def log_erro(msg): print(f"{Cores.VERMELHO}[ERRO]{Cores.RESET} {msg}")
-def log_sistema(msg): print(f"{Cores.CINZA}   >> {msg}{Cores.RESET}")
-def log_debug(msg): print(f"{Cores.CINZA}   [DEBUG] {msg}{Cores.RESET}")
+# --- PREMIUM LOGGING FUNCTIONS ---
+def exibir_banner():
+    print(f"""{Cores.CIANO}
+    ╔══════════════════════════════════════════════════════════════╗
+    ║      🏭   R A G N A R O K   A C C O U N T   F A C T O R Y     ║
+    ╚══════════════════════════════════════════════════════════════╝
+    {Cores.RESET}""")
 
-# --- CARREGADOR DE CONFIGURAÇÕES (PASSIVO) ---
+def log_info(msg): 
+    print(f"{Cores.CIANO} ℹ️  {Cores.NEGRITO}INFO:{Cores.RESET} {msg}")
+
+def log_sucesso(msg): 
+    print(f"{Cores.VERDE} ✅ {Cores.NEGRITO}SUCESSO:{Cores.RESET} {msg}")
+
+def log_aviso(msg): 
+    print(f"{Cores.AMARELO} ⚠️  {Cores.NEGRITO}ALERTA:{Cores.RESET} {msg}")
+
+def log_erro(msg): 
+    print(f"{Cores.VERMELHO} ❌ {Cores.NEGRITO}ERRO:{Cores.RESET} {msg}")
+
+def log_sistema(msg): 
+    print(f"{Cores.CINZA}    └── {msg}{Cores.RESET}")
+
+def log_debug(msg): 
+    print(f"{Cores.CINZA}    [DEBUG] {msg}{Cores.RESET}")
+
+def barra_progresso(tempo_total, prefixo='', sufixo='', comprimento=30, preenchimento='█'):
+    """Exibe uma barra de progresso visual"""
+    start_time = time.time()
+    while True:
+        elapsed_time = time.time() - start_time
+        if elapsed_time > tempo_total:
+            break
+        percent = 100 * (elapsed_time / float(tempo_total))
+        filled_length = int(comprimento * elapsed_time // tempo_total)
+        bar = preenchimento * filled_length + '-' * (comprimento - filled_length)
+        sys.stdout.write(f'\r{prefixo} |{Cores.CIANO}{bar}{Cores.RESET}| {percent:.1f}% {sufixo}')
+        sys.stdout.flush()
+        time.sleep(0.1)
+    sys.stdout.write('\n')
+
+# --- CONFIG LOADER ---
 def carregar_config():
     config_padrao = {
         "licenca_email": "",
@@ -46,7 +83,6 @@ def carregar_config():
         "telegram_token": "",
         "telegram_chat_id": ""
     }
-    # ATENÇÃO: NÃO CRIA O ARQUIVO AQUI. DEIXA PARA O MASTER.PY (WIZARD)
     if not os.path.exists(ARQUIVO_CONFIG):
         return config_padrao 
 
@@ -76,7 +112,7 @@ def enviar_telegram(mensagem):
         requests.post(url, data=data, timeout=5)
     except: pass
 
-# --- ARQUIVOS ---
+# --- FILES MANAGEMENT ---
 def carregar_json_seguro(caminho):
     if not os.path.exists(caminho): return []
     try: 
@@ -111,7 +147,7 @@ def get_base_path():
     if getattr(sys, 'frozen', False): return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-# --- UTILITÁRIOS ---
+# --- UTILS ---
 def gerar_senha_ragnarok():
     chars = string.ascii_letters + string.digits + "!@#$"
     senha = [
@@ -127,7 +163,7 @@ def gerar_senha_ragnarok():
 def delay_humano():
     time.sleep(random.uniform(0.8, 1.5))
 
-# --- EXTRATOR INTELIGENTE ---
+# --- TEXT PROCESSING ---
 def limpar_html(texto_html):
     clean = re.compile('<.*?>')
     return re.sub(clean, ' ', texto_html)
@@ -144,10 +180,10 @@ def extrair_codigo_seguro(texto_bruto):
         return codigo
     return None
 
-# --- DRISSION HELPERS ---
+# --- BROWSER ACTIONS ---
 def fechar_cookies(page):
     try:
-        # Só clica se estiver visível
+        # Only click if visible
         btn = page.ele('.cookieprivacy_btn__Pqz8U')
         if btn and btn.states.is_displayed:
             btn.click()
@@ -176,35 +212,58 @@ def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
     log_erro(f"Falha ao clicar em {nome_elemento}.")
     return False
 
-# --- BYPASS CLOUDFLARE DEFINITIVO (V60 - Lógica do Lab) ---
+# --- ANTI-BLOCKING ---
+def checar_bloqueio_ip(page):
+    """Verifies if 429 error occurred and pauses execution"""
+    titulo = page.title.lower() if page.title else ""
+    texto_body = page.ele('tag:body').text.lower() if page.ele('tag:body') else ""
+    
+    if "429" in titulo or "too many requests" in texto_body or "bloqueado" in texto_body:
+        print(f"\n{Cores.VERMELHO}╔════════════════════════════════════════════════════════════════╗{Cores.RESET}")
+        print(f"{Cores.VERMELHO}║               🚨 BLOQUEIO DE IP DETECTADO (429)                ║{Cores.RESET}")
+        print(f"{Cores.VERMELHO}╚════════════════════════════════════════════════════════════════╝{Cores.RESET}")
+        print(f"\n{Cores.AMARELO}O servidor bloqueou seu IP temporariamente por excesso de tentativas.{Cores.RESET}")
+        print(f"\n{Cores.NEGRITO}AÇÕES RECOMENDADAS:{Cores.RESET}")
+        print(f"  1. 🔄 {Cores.CIANO}Reinicie seu Modem{Cores.RESET} (para renovar IP).")
+        print(f"  2. 🛡️ {Cores.CIANO}Ligue ou Troque sua VPN{Cores.RESET}.")
+        print(f"  3. ⏳ {Cores.CIANO}Aguarde 1 hora{Cores.RESET} e tente novamente.")
+        
+        input(f"\n{Cores.VERDE}>>> Após resolver, pressione ENTER para retomar...{Cores.RESET}")
+        
+        # Try refreshing to see if unblocked
+        page.refresh()
+        time.sleep(5)
+        return True 
+    return False
+
 def vencer_cloudflare(page, checar_cookies=True):
     if checar_cookies: fechar_cookies(page)
     
     log_sistema("Analisando Cloudflare...")
-    time.sleep(5) # Delay inicial para scripts
+    time.sleep(5) 
+    
+    # Check for blocking inside Cloudflare page too
+    checar_bloqueio_ip(page)
 
-    # 1. VERIFICAÇÃO DE SUCESSO REAL (VISÍVEL)
+    # 1. VISIBLE SUCCESS CHECK
     sucesso_visivel = False
     
-    # Checa texto
     ele_texto = page.ele('text:Verificação de segurança para acesso concluída')
     if ele_texto and ele_texto.states.is_displayed:
         sucesso_visivel = True
         
-    # Checa classe
     if not sucesso_visivel:
         ele_classe = page.ele('.page_success__gilOx')
         if ele_classe and ele_classe.states.is_displayed:
             sucesso_visivel = True
 
     if sucesso_visivel:
-        log_debug(f"Status: {Cores.VERDE}SUCESSO (Confirmado e Visível).{Cores.RESET}")
-        return # Pode seguir
+        return # Success
 
-    # 2. SE NÃO ESTÁ VISÍVEL, ESTÁ PENDENTE (OU FANTASMA)
-    log_debug(f"Status: {Cores.AMARELO}Pendente ou Fantasma Detectado. Aplicando Manobra...{Cores.RESET}")
+    # 2. IF NOT VISIBLE, ATTEMPT MANEUVER
+    log_sistema(f"Aplicando manobra de bypass...")
     
-    # Foco no elemento inicial
+    # Focus on initial element
     if page.ele('#email'):
         try: page.ele('#email').click()
         except: pass
@@ -214,28 +273,26 @@ def vencer_cloudflare(page, checar_cookies=True):
         
     time.sleep(0.5)
 
-    # Sequência de Ouro: 4x Shift+Tab + Espaço
+    # Gold Sequence: 4x Shift+Tab + Space
     for _ in range(4):
         page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
         time.sleep(0.1)
     
-    # O Pulo do Gato
     page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
     
-    log_debug("Manobra executada. Aguardando 5s...")
-    time.sleep(5)
+    # time.sleep(5)
 
-# --- FUNÇÃO DE LIMPEZA DE SESSÃO ---
+# --- SESSION CLEANUP ---
 def garantir_logout(page):
-    """Garante que não há sessão ativa antes de criar nova conta"""
+    """Ensures session is clean before starting"""
     try:
-        # 1. Limpeza técnica (Cookies + Storage)
+        # 1. Technical cleanup
         page.run_cdp('Network.clearBrowserCookies')
         page.run_cdp('Network.clearBrowserCache')
         page.run_js('localStorage.clear(); sessionStorage.clear();')
     except: pass
 
-    # 2. Limpeza visual (Se houver botão de logout, clica)
+    # 2. Visual cleanup
     try:
         btn_logout = page.ele('.header_logoutBtn__6Pv_m')
         if btn_logout:
@@ -244,7 +301,7 @@ def garantir_logout(page):
             time.sleep(3)
     except: pass
 
-# ================= PROVEDORES DE E-MAIL (COM ALTA ENTROPIA) =================
+# ================= EMAIL PROVIDERS =================
 
 class EmailSession:
     def __init__(self):
@@ -263,7 +320,6 @@ class ProviderGuerrilla:
             r = obj.session_requests.get("https://api.guerrillamail.com/ajax.php?f=get_email_address", timeout=10)
             data = r.json()
             
-            # ENTROPIA ALTA: Gera string aleatória de 6 caracteres (letras+numeros)
             sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
             user_novo = f"{tag}_{sulfixo}"
             
@@ -300,7 +356,6 @@ class ProviderMailTM:
             coms = [d['domain'] for d in doms if d['domain'].endswith(".com")]
             domain = random.choice(coms) if coms else random.choice(doms)['domain']
             
-            # ENTROPIA ALTA
             sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
             obj.email = f"{tag}_{sulfixo}@{domain}"
             
@@ -337,7 +392,6 @@ class Provider1SecMail:
                 obj.domain_1sec = random.choice(bons) if bons else "esiix.com"
             else: obj.domain_1sec = "esiix.com"
             
-            # ENTROPIA ALTA
             sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
             obj.login_1sec = f"{tag}_{sulfixo}"
             
@@ -357,25 +411,25 @@ class Provider1SecMail:
         except: pass
         return None
 
-# --- LOOP PRINCIPAL ---
+# --- MAIN LOOP ---
 def criar_conta(page):
-    
-    # 1. BLINDAGEM: Garante logout ANTES de começar qualquer coisa
     garantir_logout(page)
 
     for tentativa in range(3):
         if tentativa > 0:
-            print(f"\n{Cores.AMARELO}♻️ Alternando Provedor (Tentativa {tentativa+1})...{Cores.RESET}")
-            # Limpa cookies entre tentativas também
+            print(f"\n{Cores.AMARELO}♻️  Alternando Provedor (Tentativa {tentativa+1})...{Cores.RESET}")
             garantir_logout(page)
             
         if tentativa == 0: prov = ProviderGuerrilla()
         elif tentativa == 1: prov = ProviderMailTM()
         else: prov = Provider1SecMail()
             
-        log_info(f"Gerando identidade via: {Cores.AMARELO}{prov.__class__.__name__}{Cores.RESET}...")
+        log_info(f"Gerando identidade via: {Cores.MAGENTA}{prov.__class__.__name__}{Cores.RESET}...")
+        
         obj = prov.gerar()
+        
         if not obj: continue
+
         log_sucesso(f"E-mail Gerado: {Cores.NEGRITO}{obj.email}{Cores.RESET}")
         
         # PROCESSO CADASTRO
@@ -383,26 +437,30 @@ def criar_conta(page):
             log_info("Acessando Cadastro...")
             page.get("https://member.gnjoylatam.com/pt/join")
             
-            # REFRESH SE TRAVAR
+            if checar_bloqueio_ip(page):
+                pass
+
             if not page.wait.ele_displayed('#email', timeout=20):
                 log_aviso("Site demorou. Atualizando...")
                 page.refresh()
                 vencer_cloudflare(page)
-                # Tenta logout de novo caso tenha carregado a home logada
                 garantir_logout(page)
                 if not page.wait.ele_displayed('#email', timeout=20):
                     log_erro("Site não carregou.")
                     continue 
 
             vencer_cloudflare(page, checar_cookies=True)
-
+            
             page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj.email)
             delay_humano()
             
             if not clicar_com_seguranca(page, 'text=Enviar verificação', "Botão Enviar"):
                 continue 
             
-            # Espera Código
+            if page.ele('text:já está em uso') or page.ele('text:Registered'):
+                log_aviso("E-mail já cadastrado! Trocando...")
+                continue 
+
             print(f"   {Cores.CIANO}⏳ Aguardando e-mail (Cadastro) em {obj.provider_name}...{Cores.RESET}", end="", flush=True)
             cod1 = None
             start_wait = time.time()
@@ -445,7 +503,7 @@ def criar_conta(page):
             
             log_sucesso("Cadastro enviado!")
             
-            # === LOGIN (COM RESGATE) ===
+            # === LOGIN ===
             log_info("Fazendo Login...")
             if page.ele('text=Entrar'): clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar")
             else: page.get("https://login.gnjoylatam.com")
@@ -464,7 +522,6 @@ def criar_conta(page):
             # --- OTP ---
             page.get("https://www.gnjoylatam.com/pt")
             
-            # LÓGICA DE RESGATE: Se não tiver Perfil, tenta logar de novo
             if not page.ele('.header_mypageBtn__cR1p3') and (page.ele('text=Login') or page.ele('text=Entrar')):
                 log_aviso("Sessão perdida. Tentando login de resgate...")
                 if clicar_com_seguranca(page, 'text=Login', "Botão Login") or clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar"):
@@ -490,7 +547,6 @@ def criar_conta(page):
             
             if not clicou: return False
                 
-            # 3. AGUARDAR CÓDIGO OTP
             print(f"   {Cores.CIANO}⏳ Aguardando e-mail (OTP) em {obj.provider_name}...{Cores.RESET}", end="", flush=True)
             cod2 = None
             start_wait = time.time()
@@ -534,7 +590,7 @@ def criar_conta(page):
                         status = "PRONTA_PARA_FARMAR" if achou_ok else "VERIFICAR_MANUALMENTE"
                         salvar_conta_backup(obj.email, senha, seed_text, status)
                         consolidar_conta_no_principal(obj.email, senha)
-                        return True # SUCESSO TOTAL
+                        return True 
                 else:
                     salvar_conta_backup(obj.email, senha, seed_text, status="FALTA_ATIVAR_APP")
                     return True
@@ -547,7 +603,7 @@ def criar_conta(page):
             
     return False
 
-# --- FUNÇÃO TRAMPOLIM ---
+# --- TRAMPOLINE FUNCTION ---
 def verificar_licenca_online(tipo):
     try:
         from master import verificar_licenca_online as v
@@ -559,8 +615,10 @@ def main():
     if not verificar_licenca_online("fabricador"): 
         return
 
-    print(f"\n{Cores.CIANO}>>> FÁBRICA DE CONTAS PREMIUM{Cores.RESET}")
-    try: qtd = int(input("\nQuantas contas deseja criar? (Recomendamos no máximo 10 por execução): ").strip() or "1")
+    os.system('cls' if os.name == 'nt' else 'clear')
+    exibir_banner()
+    
+    try: qtd = int(input(f"\n{Cores.AZUL}>> Quantas contas deseja criar? (Recomendado: 10): {Cores.RESET}").strip() or "1")
     except: qtd = 1
     
     if qtd > 15:
@@ -569,14 +627,25 @@ def main():
 
     print("\n>>> Inicializando Motor...")
     co = ChromiumOptions()
+    
+    # === SCREEN SIZE CORRECTION ===
+    co.set_argument('--start-maximized') 
+    co.set_argument('--window-size=1920,1080')
     co.set_argument('--force-device-scale-factor=0.8')
+    
     if CONF.get("headless", False): co.headless(True)
     
     page = ChromiumPage(addr_or_opts=co)
+    
+    # Try maximizing window
+    try: page.set.window.max()
+    except: page.set.window.size(1920, 1080)
 
     sucessos = 0
     for i in range(qtd):
-        print(f"\n{Cores.NEGRITO}=== CONTA {i+1} DE {qtd} ==={Cores.RESET}")
+        print(f"\n{Cores.NEGRITO}{Cores.AZUL}╔════════════════════════════════════════╗{Cores.RESET}")
+        print(f"{Cores.NEGRITO}{Cores.AZUL}║         CONTA {i+1} DE {qtd}                  ║{Cores.RESET}")
+        print(f"{Cores.NEGRITO}{Cores.AZUL}╚════════════════════════════════════════╝{Cores.RESET}")
         
         if criar_conta(page):
             sucessos += 1
@@ -586,8 +655,7 @@ def main():
         
         if i < qtd - 1:
             tempo = random.randint(15, 25)
-            print(f"zzz Resfriando por {tempo}s...")
-            time.sleep(tempo)
+            barra_progresso(tempo, prefixo='Resfriando', sufixo='s')
 
     msg_final = f"Fabricação Finalizada. Sucessos: {sucessos}/{qtd}"
     print(f"\n{Cores.NEGRITO}=== {msg_final} ==={Cores.RESET}")

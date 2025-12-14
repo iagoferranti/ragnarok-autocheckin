@@ -21,6 +21,8 @@ class Cores:
     AMARELO = '\033[93m'
     VERMELHO = '\033[91m'
     CIANO = '\033[96m'
+    AZUL = '\033[94m'
+    MAGENTA = '\033[95m'
     CINZA = '\033[90m'
     NEGRITO = '\033[1m'
 
@@ -35,8 +37,7 @@ LOGS_SESSAO = []
 # --- CONFIG MANAGER (PASSIVO) ---
 def carregar_config():
     padrao = {"headless": False, "telegram_token": "", "telegram_chat_id": ""}
-    if not os.path.exists(ARQUIVO_CONFIG): 
-        return padrao 
+    if not os.path.exists(ARQUIVO_CONFIG): return padrao 
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
             user = json.load(f)
@@ -45,6 +46,21 @@ def carregar_config():
     except: return padrao
 
 CONF = carregar_config()
+
+# --- VISUAL PREMIUM ---
+def definir_titulo(texto):
+    if os.name == 'nt':
+        ctypes.windll.kernel32.SetConsoleTitleW(texto)
+
+def exibir_banner_farm():
+    print(f"""{Cores.MAGENTA}
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  🎰  R A G N A R O K   A U T O   F A R M   S Y S T E M  🎰  ║
+    ╚══════════════════════════════════════════════════════════════╝
+    {Cores.RESET}""")
+
+def log_step(icone, texto, cor=Cores.RESET):
+    print(f"   {cor}{icone} {texto}{Cores.RESET}")
 
 # --- TELEGRAM ---
 def enviar_telegram(mensagem):
@@ -65,16 +81,20 @@ def get_base_path():
 def registrar_log(email, status, obs=""):
     agora = datetime.datetime.now().strftime("%H:%M:%S")
     linha = f"[{agora}] {email} -> {status} {f'({obs})' if obs else ''}"
-    cor = Cores.VERDE if status in ["SUCESSO", "JÁ FEITO"] else Cores.VERMELHO
-    print(f"   {cor}{status}:{Cores.RESET} {email} {f'| {obs}' if obs else ''}")
+    
+    cor_status = Cores.VERDE if status in ["SUCESSO", "JÁ FEITO"] else Cores.VERMELHO
+    icone = "✅" if status in ["SUCESSO", "JÁ FEITO"] else "❌"
+    
+    print(f"\n   {Cores.NEGRITO}STATUS:{Cores.RESET} {icone} {cor_status}{status}{Cores.RESET}")
+    if obs: print(f"   {Cores.CINZA}OBS: {obs}{Cores.RESET}")
+    
     LOGS_SESSAO.append(linha)
 
 def salvar_arquivo_log():
     try:
         base_dir = get_base_path()
         logs_dir = os.path.join(base_dir, "logs")
-        if not os.path.exists(logs_dir):
-            os.makedirs(logs_dir)
+        if not os.path.exists(logs_dir): os.makedirs(logs_dir)
 
         data_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         nome_arq = f"log_execucao_{data_str}.txt"
@@ -86,37 +106,27 @@ def salvar_arquivo_log():
 
 # --- JSON HELPERS ---
 def carregar_json_seguro(caminho):
-    """Retorna uma lista vazia se falhar ou não existir"""
     if not os.path.exists(caminho): return []
-    try:
+    try: 
         with open(caminho, "r", encoding="utf-8") as f: return json.load(f)
     except: return []
 
 def salvar_json_seguro(caminho, dados):
     try:
-        with open(caminho, "w", encoding="utf-8") as f:
-            json.dump(dados, f, indent=4)
+        with open(caminho, "w", encoding="utf-8") as f: json.dump(dados, f, indent=4)
     except: pass
 
 def carregar_historico_hoje():
     hoje = datetime.datetime.now().strftime("%Y-%m-%d")
     dados = carregar_json_seguro(ARQUIVO_HISTORICO)
-    
-    # CORREÇÃO DO ERRO: Se retornar lista (padrão de erro ou arquivo vazio), converte para dict
-    if isinstance(dados, list): 
-        dados = {}
-    
+    if isinstance(dados, list): dados = {}
     if dados.get("data") == hoje: return set(dados.get("contas", []))
     return set()
 
 def adicionar_ao_historico(email):
     hoje = datetime.datetime.now().strftime("%Y-%m-%d")
     dados = carregar_json_seguro(ARQUIVO_HISTORICO)
-    
-    # CORREÇÃO: Garante que é dicionário antes de manipular
-    if isinstance(dados, list):
-        dados = {"data": hoje, "contas": []}
-        
+    if isinstance(dados, list): dados = {"data": hoje, "contas": []}
     if dados.get("data") != hoje: dados = {"data": hoje, "contas": []}
     
     if email not in dados["contas"]:
@@ -130,48 +140,17 @@ def verificar_licenca_online(permissao_necessaria="all"):
         return v(permissao_necessaria)
     except: return True
 
-# --- INTERFACE DE CRIAÇÃO DE CONTAS ---
-def criar_contas_interativo(path):
-    print(f"\n{Cores.AMARELO}⚠️  Arquivo '{ARQUIVO_CONTAS}' não encontrado!{Cores.RESET}")
-    if input("   >> Deseja cadastrar contas agora? (S/N): ").lower() != 's':
-        return []
-
-    contas = []
-    try:
-        qtd = int(input("\nQuantas contas deseja adicionar? : "))
-    except: 
-        print("Quantidade inválida.")
-        return []
-
-    print("\nDigite os dados das contas (Pressione Enter após cada campo):")
-    for i in range(qtd):
-        print(f"\n{Cores.NEGRITO}--- CONTA {i+1} ---{Cores.RESET}")
-        email = input("   E-mail: ").strip()
-        senha = input("   Senha:  ").strip()
-        
-        if email and senha:
-            contas.append({"email": email, "password": senha})
-        else:
-            print(f"{Cores.VERMELHO}   Dados inválidos. Pulando...{Cores.RESET}")
-
-    if contas:
-        salvar_json_seguro(path, contas)
-        print(f"\n{Cores.VERDE}✅ {len(contas)} contas salvas com sucesso!{Cores.RESET}")
-        time.sleep(1)
-    
-    return contas
-
+# --- INTERFACE ---
 def setup_contas():
     path = os.path.join(get_base_path(), ARQUIVO_CONTAS)
     contas = carregar_json_seguro(path)
-    
-    # SE NÃO TIVER CONTAS, CHAMA O CRIADOR
     if not contas:
-        contas = criar_contas_interativo(path)
-        
+        print(f"\n{Cores.AMARELO}⚠️  Nenhuma conta encontrada em '{ARQUIVO_CONTAS}'!{Cores.RESET}")
+        time.sleep(3)
+        return []
     return contas
 
-# --- NAVEGAÇÃO INTELIGENTE ---
+# --- NAVEGAÇÃO ---
 def descobrir_url_evento(page):
     path = os.path.join(get_base_path(), "config_evento.json")
     
@@ -182,14 +161,14 @@ def descobrir_url_evento(page):
                 if time.time() - d.get("ts", 0) < 86400: return d['url']
         except: pass
         
-    print("Buscando URL do evento atual...")
+    log_step("🔍", "Buscando URL do evento atual...", Cores.CIANO)
     url_encontrada = None
     
     try:
         page.get("https://www.gnjoylatam.com/pt")
         btn = page.wait.ele_displayed('text=Máquina PonPon', timeout=15)
         if not btn: btn = page.wait.ele_displayed('text:PonPon', timeout=5)
-             
+              
         if btn:
             btn.click()
             time.sleep(5) 
@@ -199,8 +178,8 @@ def descobrir_url_evento(page):
     except: pass
     
     if not url_encontrada:
-        print(f"{Cores.AMARELO}⚠️ Não foi possível detectar o evento automaticamente.{Cores.RESET}")
-        url_encontrada = input("Cole o link do evento (ex: .../decemberroulette): ").strip()
+        print(f"{Cores.AMARELO}⚠️ Não detectado automaticamente.{Cores.RESET}")
+        url_encontrada = input("   >> Cole o link do evento: ").strip()
 
     if url_encontrada:
         try:
@@ -223,12 +202,14 @@ def processar_roleta(page):
         if page.handle_alert(accept=True): pass
         
         ele_count = page.wait.ele_displayed('.styles_attempts_count__iHKXy', timeout=5)
-        if not ele_count: return None
+        if not ele_count: 
+            log_step("🎰", "Roleta não disponível", Cores.CINZA)
+            return None
         
         try: qtd = int(ele_count.text)
         except: qtd = 0
         
-        if qtd > 0: print(f"   🎰 Giros disponíveis: {qtd}")
+        if qtd > 0: log_step("🎟️", f"Giros disponíveis: {qtd}", Cores.AMARELO)
         
         while qtd > 0:
             btn = page.ele('@alt=Start')
@@ -240,7 +221,7 @@ def processar_roleta(page):
                 ele_premio = page.wait.ele_displayed('.styles_prize_object__LLDTh', timeout=15)
                 if ele_premio:
                     nm = ele_premio.text
-                    print(f"      🎉 {Cores.AMARELO}Ganhou: {nm}{Cores.RESET}")
+                    print(f"      {Cores.MAGENTA}★ PRÊMIO:{Cores.RESET} {Cores.NEGRITO}{nm}{Cores.RESET}")
                     if premio_ganho: premio_ganho += f" + {nm}"
                     else: premio_ganho = f"Prêmio: {nm}"
                     time.sleep(2)
@@ -253,14 +234,11 @@ def processar_roleta(page):
     except: pass
     return premio_ganho
 
-# --- LÓGICA DE BYPASS V60 ---
 def vencer_cloudflare_login(page):
     time.sleep(3)
     sucesso_visivel = False
-    
     ele_texto = page.ele('text:Verificação de segurança para acesso concluída')
     if ele_texto and ele_texto.states.is_displayed: sucesso_visivel = True
-        
     if not sucesso_visivel:
         ele_classe = page.ele('.page_success__gilOx')
         if ele_classe and ele_classe.states.is_displayed: sucesso_visivel = True
@@ -271,18 +249,38 @@ def vencer_cloudflare_login(page):
         if page.ele('#email'): page.ele('#email').click()
         else: page.ele('tag:body').click()
     except: pass
-        
     time.sleep(0.5)
     for _ in range(4):
         page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
         time.sleep(0.1)
-    
     page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
     time.sleep(5)
 
-def processar(page, conta, url):
+# --- 429 PROTECTION ---
+def checar_bloqueio_ip(page):
+    titulo = page.title.lower() if page.title else ""
+    texto_body = page.ele('tag:body').text.lower() if page.ele('tag:body') else ""
+    
+    if "429" in titulo or "too many requests" in texto_body:
+        print(f"\n{Cores.VERMELHO}╔════════════════════════════════════════════════════════════════╗{Cores.RESET}")
+        print(f"{Cores.VERMELHO}║               🚨 BLOQUEIO DE IP DETECTADO (429)                ║{Cores.RESET}")
+        print(f"{Cores.VERMELHO}╚════════════════════════════════════════════════════════════════╝{Cores.RESET}")
+        print(f"\n{Cores.AMARELO}PAUSA DE SEGURANÇA: O servidor bloqueou seu IP.{Cores.RESET}")
+        print(f"👉 Troque sua VPN ou reinicie o modem e pressione ENTER.")
+        input()
+        page.refresh()
+        time.sleep(5)
+        return True
+    return False
+
+def processar(page, conta, url, index, total):
     email = conta['email']
-    print(f"\n>>> Conta: {email}")
+    definir_titulo(f"Ragnarok Farm | Conta {index}/{total} | {email}")
+    
+    print(f"\n{Cores.AZUL}┌──────────────────────────────────────────────────────────────┐{Cores.RESET}")
+    print(f"{Cores.AZUL}│ 👤 CONTA {str(index).zfill(2)}/{str(total).zfill(2)}: {Cores.NEGRITO}{email.ljust(35)}{Cores.RESET}{Cores.AZUL}│{Cores.RESET}")
+    print(f"{Cores.AZUL}└──────────────────────────────────────────────────────────────┘{Cores.RESET}")
+    
     sucesso = False
     log_status = "ERRO"
     msg = ""
@@ -292,6 +290,8 @@ def processar(page, conta, url):
         page.get(url)
         time.sleep(2)
         
+        checar_bloqueio_ip(page)
+        
         if page.wait.ele_displayed('text:Login', timeout=5):
             page.ele('text:Login').click()
         elif page.wait.ele_displayed('@alt=LOGIN BUTTON', timeout=5):
@@ -299,6 +299,7 @@ def processar(page, conta, url):
             
         page.wait.url_change('login.gnjoylatam.com', timeout=15)
         
+        log_step("🛡️", "Bypassing Cloudflare...", Cores.CINZA)
         vencer_cloudflare_login(page)
             
         page.ele('#email').input(email)
@@ -307,7 +308,7 @@ def processar(page, conta, url):
         page.ele('text=CONTINUAR').click()
         
         if page.wait.ele_displayed('text:Logout', timeout=30):
-            print("   ✅ Login OK")
+            log_step("🔓", "Login Efetuado", Cores.VERDE)
             
             if page.url != url: page.get(url); time.sleep(3)
             
@@ -317,11 +318,13 @@ def processar(page, conta, url):
             if btn:
                 if "complete" in btn.attr("src"):
                     log_status = "JÁ FEITO"
+                    log_step("📅", "Check-in já realizado hoje", Cores.AMARELO)
                     sucesso = True
                 else:
                     btn.click()
                     time.sleep(4)
                     log_status = "SUCESSO"
+                    log_step("📅", "Check-in realizado!", Cores.VERDE)
                     sucesso = True
             
             # Roleta
@@ -339,52 +342,64 @@ def processar(page, conta, url):
     fazer_logout(page)
 
 def main():
-    if not verificar_licenca_online("checkin"): 
-        return
-    print(f"\n{Cores.CIANO}>>> AUTO FARM PREMIUM{Cores.RESET}")
+    if not verificar_licenca_online("checkin"): return
+    os.system('cls' if os.name == 'nt' else 'clear')
+    exibir_banner_farm()
     
-    # 1. SETUP DE CONTAS (AGORA VEM ANTES DO BROWSER)
     contas = setup_contas()
-    
-    if not contas:
-        print(f"{Cores.AMARELO}Nenhuma conta configurada. Encerrando.{Cores.RESET}")
-        return # Sai antes de abrir o navegador
+    if not contas: return
 
-    # 2. INICIALIZA BROWSER (SÓ DEPOIS DE TER CONTAS)
+    print(f"\n{Cores.CINZA}>>> Inicializando Motor Gráfico...{Cores.RESET}")
     co = ChromiumOptions()
-    co.set_argument('--force-device-scale-factor=0.75')
+    co.set_argument('--start-maximized') 
+    co.set_argument('--window-size=1920,1080')
+    co.set_argument('--force-device-scale-factor=0.8')
+    
     if CONF.get("headless", False):
-        print(f"{Cores.AMARELO}Modo Invisível Ativo.{Cores.RESET}")
+        print(f"{Cores.AMARELO}⚠️  Modo Invisível (Headless) Ativo{Cores.RESET}")
         co.headless(True)
         
     page = ChromiumPage(addr_or_opts=co)
     
-    # 3. BUSCA URL
+    # === FORÇA MAXIMIZAR DE VERDADE ===
+    try: 
+        page.set.window.max()
+    except: 
+        # Fallback se maximizar falhar
+        page.set.window.size(1920, 1080)
+
     url = descobrir_url_evento(page)
-    
     ja_foi = carregar_historico_hoje()
-    print(f"Total Contas: {len(contas)} | Já feitas hoje: {len(ja_foi)}")
+    
+    contas_para_fazer = [c for c in contas if c['email'] not in ja_foi]
+    print(f"{Cores.CIANO}📊 RESUMO:{Cores.RESET} Total: {len(contas)} | Pendentes: {len(contas_para_fazer)} | Feitos: {len(ja_foi)}")
+    time.sleep(2)
     
     count_sucesso = 0
-    for acc in contas:
-        if acc['email'] in ja_foi:
-            print(f"{Cores.CINZA}⏩ Pulando {acc['email']}{Cores.RESET}")
-            continue
-            
-        processar(page, acc, url)
+    total_exec = len(contas_para_fazer)
+    
+    for i, acc in enumerate(contas_para_fazer):
+        processar(page, acc, url, i+1, total_exec)
         count_sucesso += 1
         
-        t = random.randint(5, 12)
-        print(f"--- Aguardando {t}s ---")
-        time.sleep(t)
+        if i < total_exec - 1:
+            t = random.randint(5, 12)
+            print(f"\n{Cores.CINZA}⏳ Aguardando {t}s para próxima conta...{Cores.RESET}")
+            time.sleep(t)
         
-    msg_fim = f"FARM FINALIZADO. Processados: {count_sucesso}"
-    print(f"\n{Cores.VERDE}=== {msg_fim} ==={Cores.RESET}")
+    msg_fim = f"FARM FINALIZADO - {count_sucesso} CONTAS PROCESSADAS"
+    
+    # --- CORREÇÃO DO ERRO DE STR + INT ---
+    tam_linha = len(msg_fim) + 4
+    print(f"\n{Cores.VERDE}╔{'═' * tam_linha}╗")
+    print(f"║  {msg_fim}  ║")
+    print(f"╚{'═' * tam_linha}╝{Cores.RESET}")
+    
     salvar_arquivo_log()
     enviar_telegram(msg_fim)
     
     page.quit()
-    input("Enter para sair...")
+    input("\nPressione Enter para voltar ao menu...")
 
 def executar(): main()
 
