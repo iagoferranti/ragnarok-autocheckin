@@ -7,7 +7,6 @@ import subprocess
 import textwrap
 import ctypes
 import shutil
-import hashlib
 import re
 
 from datetime import datetime
@@ -38,18 +37,7 @@ ARQUIVO_HISTORICO = "historico_diario.json"
 URL_VERSION_TXT = "https://raw.githubusercontent.com/iagoferranti/ragnarok-autocheckin/main/version.txt"
 URL_DOWNLOAD_EXE = "https://github.com/iagoferranti/ragnarok-autocheckin/releases/latest/download/RagnarokMasterTool.exe"
 URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
-URL_DOWNLOAD_SHA256 = "https://github.com/iagoferranti/ragnarok-autocheckin/releases/latest/download/RagnarokMasterTool.exe.sha256"
 
-def _parse_sha256_text(text: str) -> str:
-    token = (text or "").strip().split()[0]
-    return re.sub(r"[^0-9a-fA-F]", "", token).lower()
-
-def _sha256_file(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 def _download_to_file(url: str, dst: str, timeout=(5, 60)):
     with requests.get(url, stream=True, timeout=timeout) as r:
@@ -200,39 +188,53 @@ def verificar_atualizacao():
 
 def realizar_update():
     print(f"\n{Cores.CIANO}📥 Baixando atualização...{Cores.RESET}")
-
-    base_dir = get_base_path()
-    exe_atual = os.path.abspath(sys.executable)
-    nome_exe = os.path.basename(exe_atual)
-
-    temp_exe = os.path.join(base_dir, "update_temp.exe")
-    temp_sha = os.path.join(base_dir, "update_temp.sha256")
-    backup = os.path.join(base_dir, f"{nome_exe}.old")
-
     try:
-        _download_to_file(URL_DOWNLOAD_EXE, temp_exe, timeout=(5, 120))
-        _download_to_file(URL_DOWNLOAD_SHA256, temp_sha, timeout=(5, 30))
+        base_dir = get_base_path()
+        nome_exe = os.path.basename(sys.executable)
+        caminho_novo = os.path.join(base_dir, "update_temp.exe")
 
-        if os.path.getsize(temp_exe) < 200_000:
-            raise RuntimeError("Arquivo suspeito (muito pequeno)")
+        r = requests.get(URL_DOWNLOAD_EXE, stream=True, timeout=(5, 120))
+        r.raise_for_status()
 
-        with open(temp_sha, "rb") as f:
-            content = f.read().decode(errors="ignore")
-            esperado = _parse_sha256_text(content)
+        with open(caminho_novo, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
 
+        # validação simples anti-HTML/erro
+        if os.path.getsize(caminho_novo) < 200_000:
+            raise RuntimeError("Arquivo baixado muito pequeno (provável erro no download).")
 
-        obtido = _sha256_file(temp_exe)
-        if obtido != esperado:
-            raise RuntimeError("SHA256 inválido")
+        print(f"{Cores.VERDE}✅ Download concluído! Reiniciando...{Cores.RESET}")
+        time.sleep(1)
+
+        exe_atual = os.path.abspath(sys.executable)
+        backup = os.path.join(base_dir, f"{nome_exe}.old")
 
         bat_script = textwrap.dedent(f"""
             @echo off
+            chcp 65001 >NUL
             timeout /t 2 >NUL
-            copy /Y "{exe_atual}" "{backup}" >NUL
-            del /F /Q "{exe_atual}" >NUL
-            move /Y "{temp_exe}" "{exe_atual}" >NUL
+
+            rem Backup do exe atual
+            if exist "{exe_atual}" copy /Y "{exe_atual}" "{backup}" > NUL 2>&1
+
+            rem Fecha o processo atual
+            taskkill /PID {os.getpid()} /F > NUL 2>&1
+
+            :LOOP
+            del /F /Q "{exe_atual}" > NUL 2>&1
+            if exist "{exe_atual}" (timeout /t 1 >NUL & goto LOOP)
+
+            ren "{caminho_novo}" "{nome_exe}" > NUL 2>&1
+
+            rem Se falhou, tenta rollback
+            if not exist "{exe_atual}" (
+                if exist "{backup}" copy /Y "{backup}" "{exe_atual}" > NUL 2>&1
+            )
+
             start "" "{exe_atual}"
-            del "%~f0"
+            del "%~f0" & exit
         """)
 
         bat_path = os.path.join(base_dir, "updater.bat")
@@ -243,8 +245,9 @@ def realizar_update():
         sys.exit()
 
     except Exception as e:
-        print(f"{Cores.VERMELHO}❌ Update falhou: {e}{Cores.RESET}")
-        input("Enter para continuar...")
+        print(f"{Cores.VERMELHO}Erro no update: {e}{Cores.RESET}")
+        input()
+
 
 
 # --- LICENÇA & AUTH ---
