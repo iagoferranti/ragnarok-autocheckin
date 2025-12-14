@@ -154,6 +154,7 @@ def setup_contas():
 def descobrir_url_evento(page):
     path = os.path.join(get_base_path(), "config_evento.json")
     
+    # 1. Tenta Cache (Válido por 24h)
     if os.path.exists(path):
         try:
             with open(path, "r") as f:
@@ -165,22 +166,50 @@ def descobrir_url_evento(page):
     url_encontrada = None
     
     try:
+        # Carrega a home
         page.get("https://www.gnjoylatam.com/pt")
-        btn = page.wait.ele_displayed('text=Máquina PonPon', timeout=15)
-        if not btn: btn = page.wait.ele_displayed('text:PonPon', timeout=5)
-              
+        
+        # Tenta fechar popups chatos da home (Opcional, mas ajuda)
+        try:
+            for x in ['text:FECHAR', 'text:Close', '.close_btn', '.modal-close']:
+                if page.ele(x): page.ele(x).click()
+        except: pass
+
+        # ESTRATÉGIA "SNIPER": 
+        # Em vez de clicar, procuramos o link direto no HTML.
+        # Procuramos por texto OU por parte do link (mais seguro)
+        
+        btn = None
+        # Tenta pelo Texto
+        if not btn: btn = page.wait.ele_displayed('text=Máquina PonPon', timeout=5)
+        if not btn: btn = page.wait.ele_displayed('text:PonPon', timeout=2)
+        
+        # Tenta pelo Link (Se mudarem o texto, o link 'roulette' costuma manter)
+        if not btn: btn = page.ele('css:a[href*="roulette"]')
+        if not btn: btn = page.ele('css:a[href*="event"]')
+
         if btn:
-            btn.click()
-            time.sleep(5) 
-            nova = page.latest_tab 
-            url_encontrada = nova.url
-            nova.close() 
-    except: pass
+            # Extrai o link direto do atributo href
+            link_bruto = btn.attr('href')
+            
+            if link_bruto:
+                # Corrige link relativo se necessário
+                if link_bruto.startswith('http'):
+                    url_encontrada = link_bruto
+                else:
+                    url_encontrada = "https://www.gnjoylatam.com" + link_bruto
+                
+                log_step("🎯", f"URL Detectada: {url_encontrada}", Cores.VERDE)
+
+    except Exception as e: 
+        print(f"Erro na detecção: {e}")
     
+    # Fallback Manual
     if not url_encontrada:
-        print(f"{Cores.AMARELO}⚠️ Não detectado automaticamente.{Cores.RESET}")
+        print(f"{Cores.AMARELO}⚠️  Não foi possível detectar automaticamente.{Cores.RESET}")
         url_encontrada = input("   >> Cole o link do evento: ").strip()
 
+    # Salva no Cache
     if url_encontrada:
         try:
             with open(path, "w") as f: 

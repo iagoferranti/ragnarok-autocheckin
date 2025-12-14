@@ -8,6 +8,7 @@ import textwrap
 import ctypes
 import shutil
 import re
+import tempfile
 
 from datetime import datetime
 
@@ -194,13 +195,9 @@ def realizar_update():
         nome_exe = os.path.basename(exe_atual)
 
         caminho_novo = os.path.join(base_dir, "update_temp.exe")
-        bat_path = os.path.join(base_dir, "updater.bat")
-        log_path = os.path.join(base_dir, "update.log")
-        backup = os.path.join(base_dir, f"{nome_exe}.old")
 
         r = requests.get(URL_DOWNLOAD_EXE, stream=True, timeout=(5, 120))
         r.raise_for_status()
-
         with open(caminho_novo, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
@@ -212,86 +209,73 @@ def realizar_update():
         print(f"{Cores.VERDE}✅ Download concluído! Reiniciando...{Cores.RESET}")
         time.sleep(1)
 
-        bat_script = textwrap.dedent(f"""
+        backup = os.path.join(base_dir, f"{nome_exe}.old")
+
+        # cria updater fora do OneDrive
+        temp_dir = tempfile.gettempdir()
+        cmd_path = os.path.join(temp_dir, "rmt_updater.cmd")
+        log_path = os.path.join(temp_dir, "rmt_update.log")
+
+        cmd_script = textwrap.dedent(f"""
             @echo off
             chcp 65001 >NUL
-            setlocal enabledelayedexpansion
 
             echo ===== UPDATE START %DATE% %TIME% ===== > "{log_path}"
-            echo exe_atual="{exe_atual}" >> "{log_path}"
-            echo base_dir="{base_dir}" >> "{log_path}"
-            echo novo="{caminho_novo}" >> "{log_path}"
+            echo exe="{exe_atual}" >> "{log_path}"
+            echo new="{caminho_novo}" >> "{log_path}"
             echo backup="{backup}" >> "{log_path}"
 
-            rem 1) Backup
-            if exist "{exe_atual}" (
-                copy /Y "{exe_atual}" "{backup}" >> "{log_path}" 2>&1
-            )
+            rem Backup
+            if exist "{exe_atual}" copy /Y "{exe_atual}" "{backup}" >> "{log_path}" 2>&1
 
-            rem 2) Espera o processo liberar o arquivo (sem taskkill)
-            rem    (como o Python vai sair, o lock deve soltar)
-            timeout /t 1 >NUL
+            rem espera app fechar
+            timeout /t 2 >NUL
 
-            rem 3) Tenta deletar o exe atual (com retries)
-            set OKDEL=0
+            rem tenta apagar e substituir
             for /L %%i in (1,1,20) do (
                 del /F /Q "{exe_atual}" >> "{log_path}" 2>&1
-                if not exist "{exe_atual}" (
-                    set OKDEL=1
-                    echo deletou exe na tentativa %%i >> "{log_path}"
-                    goto :DEL_DONE
-                )
+                if not exist "{exe_atual}" goto :DELOK
                 timeout /t 1 >NUL
             )
-            :DEL_DONE
+            echo FALHA: nao consegui apagar exe >> "{log_path}"
+            goto :ROLLBACK
 
-            if "!OKDEL!"=="0" (
-                echo FALHA: nao consegui apagar o exe atual >> "{log_path}"
-                goto :ROLLBACK
-            )
-
-            rem 4) Renomeia update_temp.exe -> nome original
+            :DELOK
             ren "{caminho_novo}" "{nome_exe}" >> "{log_path}" 2>&1
-
             if not exist "{exe_atual}" (
-                echo FALHA: ren nao criou o exe novo >> "{log_path}"
+                echo FALHA: ren nao criou exe >> "{log_path}"
                 goto :ROLLBACK
             )
 
-            rem 5) Sobe o app
-            echo Iniciando exe novo... >> "{log_path}"
+            echo START exe novo >> "{log_path}"
             start "" "{exe_atual}" >> "{log_path}" 2>&1
-
             echo ===== UPDATE OK %DATE% %TIME% ===== >> "{log_path}"
             del "%~f0" >> "{log_path}" 2>&1
             exit
 
             :ROLLBACK
-            echo Tentando rollback... >> "{log_path}"
+            echo ROLLBACK >> "{log_path}"
             if exist "{backup}" (
                 copy /Y "{backup}" "{exe_atual}" >> "{log_path}" 2>&1
                 start "" "{exe_atual}" >> "{log_path}" 2>&1
                 echo ===== ROLLBACK OK %DATE% %TIME% ===== >> "{log_path}"
             ) else (
-                echo ===== ROLLBACK FAIL (sem backup) ===== >> "{log_path}"
+                echo ===== ROLLBACK FAIL ===== >> "{log_path}"
             )
             del "%~f0" >> "{log_path}" 2>&1
             exit
         """)
 
-        with open(bat_path, "w", encoding="utf-8") as f:
-            f.write(bat_script)
+        with open(cmd_path, "w", encoding="utf-8") as f:
+            f.write(cmd_script)
 
-        # Executa via cmd (bem mais confiável que rodar .bat direto)
-        subprocess.Popen(["cmd.exe", "/c", bat_path], cwd=base_dir, shell=False)
-
-        # Sai para liberar o lock do exe
+        # chama via cmd de forma explícita
+        subprocess.Popen(["cmd.exe", "/c", cmd_path], cwd=temp_dir, shell=False)
         sys.exit()
 
     except Exception as e:
         print(f"{Cores.VERMELHO}Erro no update: {e}{Cores.RESET}")
         input()
-
 
 
 

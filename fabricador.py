@@ -627,8 +627,6 @@ def main():
 
     print("\n>>> Inicializando Motor...")
     co = ChromiumOptions()
-    
-    # === SCREEN SIZE CORRECTION ===
     co.set_argument('--start-maximized') 
     co.set_argument('--window-size=1920,1080')
     co.set_argument('--force-device-scale-factor=0.8')
@@ -636,8 +634,6 @@ def main():
     if CONF.get("headless", False): co.headless(True)
     
     page = ChromiumPage(addr_or_opts=co)
-    
-    # Try maximizing window
     try: page.set.window.max()
     except: page.set.window.size(1920, 1080)
 
@@ -660,8 +656,50 @@ def main():
     msg_final = f"Fabricação Finalizada. Sucessos: {sucessos}/{qtd}"
     print(f"\n{Cores.NEGRITO}=== {msg_final} ==={Cores.RESET}")
     enviar_telegram(msg_final)
-    page.quit()
-    input("\nEnter para voltar...")
+    
+    # --- INTEGRAÇÃO UX: FECHA O BROWSER DE CRIAÇÃO ---
+    page.quit() 
+
+    # --- PERGUNTA DE TRANSIÇÃO (PREMIUM UX) ---
+    if sucessos > 0:
+        print(f"\n{Cores.CIANO}🚀  PRÓXIMO PASSO:{Cores.RESET}")
+        print(f"   Deseja rodar o {Cores.AMARELO}AUTO FARM{Cores.RESET} nessas contas agora?")
+        print(f"   {Cores.CINZA}(Recomendado: Troque o IP antes se criou mais de 5 contas){Cores.RESET}")
+        
+        resp = input(f"\n   >> Iniciar Farm? (S/N) [Enter=Não]: ").strip().lower()
+        
+        if resp == 's':
+            print(f"\n{Cores.VERDE}🔄 Migrando para o módulo de Farm...{Cores.RESET}")
+            time.sleep(2)
+            try:
+                # Importação tardia para garantir que o módulo existe e evitar ciclo
+                import checkin_bot_v2
+                
+                # Executa o unificador silenciosamente antes para garantir que as contas novas estejam no principal
+                from master import unificar_contas
+                # Precisaríamos adaptar o unificar_contas para rodar sem input, 
+                # mas por enquanto, o checkin_bot_v2 já lê o arquivo principal.
+                # Se as contas novas foram salvas no 'novas_contas.json', precisamos mover pro principal.
+                
+                # Lógica rápida de unificação antes de ir pro farm
+                try:
+                    with open(ARQUIVO_SALVAR, "r") as f: novas = json.load(f)
+                    with open(ARQUIVO_PRINCIPAL, "r") as f: principais = json.load(f)
+                    existentes = set(c['email'] for c in principais)
+                    for n in novas:
+                        if n['email'] not in existentes: principais.append(n)
+                    with open(ARQUIVO_PRINCIPAL, "w") as f: json.dump(principais, f, indent=4)
+                except: pass
+
+                # Chama o Farm
+                checkin_bot_v2.executar()
+            except Exception as e:
+                print(f"{Cores.VERMELHO}Erro ao iniciar Farm: {e}{Cores.RESET}")
+                input()
+        else:
+            print("\nVoltando ao menu...")
+    else:
+        input("\nEnter para voltar...")
 
 def executar():
     main()
