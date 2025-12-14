@@ -277,9 +277,23 @@ def processar(page, conta, url, index, total):
     email = conta['email']
     definir_titulo(f"Ragnarok Farm | Conta {index}/{total} | {email}")
     
-    print(f"\n{Cores.AZUL}┌──────────────────────────────────────────────────────────────┐{Cores.RESET}")
-    print(f"{Cores.AZUL}│ 👤 CONTA {str(index).zfill(2)}/{str(total).zfill(2)}: {Cores.NEGRITO}{email.ljust(35)}{Cores.RESET}{Cores.AZUL}│{Cores.RESET}")
-    print(f"{Cores.AZUL}└──────────────────────────────────────────────────────────────┘{Cores.RESET}")
+    # --- LÓGICA DE ALINHAMENTO DINÂMICO ---
+    # 1. Monta o texto puro (sem cores) para medir o tamanho real
+    texto_label = f" 👤 CONTA {str(index).zfill(2)}/{str(total).zfill(2)}: "
+    texto_email = f"{email} " # Espaço extra no final
+    texto_completo = texto_label + texto_email
+    
+    # 2. Define a largura da caixa (Mínimo 60, ou cresce se o email for gigante)
+    largura_box = max(len(texto_completo), 60)
+    
+    # 3. Calcula preenchimento (padding) para alinhar a borda direita
+    padding = " " * (largura_box - len(texto_completo))
+    
+    # 4. Desenha
+    print(f"\n{Cores.AZUL}┌{'─' * largura_box}┐{Cores.RESET}")
+    # Aqui montamos a linha com as cores certas
+    print(f"{Cores.AZUL}│{Cores.RESET}{texto_label}{Cores.NEGRITO}{texto_email}{Cores.RESET}{padding}{Cores.AZUL}│{Cores.RESET}")
+    print(f"{Cores.AZUL}└{'─' * largura_box}┘{Cores.RESET}")
     
     sucesso = False
     log_status = "ERRO"
