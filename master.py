@@ -216,8 +216,10 @@ def realizar_update():
         if os.path.getsize(temp_exe) < 200_000:
             raise RuntimeError("Arquivo suspeito (muito pequeno)")
 
-        with open(temp_sha, "r", encoding="utf-8") as f:
-            esperado = _parse_sha256_text(f.read())
+        with open(temp_sha, "rb") as f:
+            content = f.read().decode(errors="ignore")
+            esperado = _parse_sha256_text(content)
+
 
         obtido = _sha256_file(temp_exe)
         if obtido != esperado:
