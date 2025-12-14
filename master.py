@@ -190,8 +190,13 @@ def realizar_update():
     print(f"\n{Cores.CIANO}📥 Baixando atualização...{Cores.RESET}")
     try:
         base_dir = get_base_path()
-        nome_exe = os.path.basename(sys.executable)
+        exe_atual = os.path.abspath(sys.executable)
+        nome_exe = os.path.basename(exe_atual)
+
         caminho_novo = os.path.join(base_dir, "update_temp.exe")
+        bat_path = os.path.join(base_dir, "updater.bat")
+        log_path = os.path.join(base_dir, "update.log")
+        backup = os.path.join(base_dir, f"{nome_exe}.old")
 
         r = requests.get(URL_DOWNLOAD_EXE, stream=True, timeout=(5, 120))
         r.raise_for_status()
@@ -201,52 +206,92 @@ def realizar_update():
                 if chunk:
                     f.write(chunk)
 
-        # validação simples anti-HTML/erro
         if os.path.getsize(caminho_novo) < 200_000:
             raise RuntimeError("Arquivo baixado muito pequeno (provável erro no download).")
 
         print(f"{Cores.VERDE}✅ Download concluído! Reiniciando...{Cores.RESET}")
         time.sleep(1)
 
-        exe_atual = os.path.abspath(sys.executable)
-        backup = os.path.join(base_dir, f"{nome_exe}.old")
-
         bat_script = textwrap.dedent(f"""
             @echo off
             chcp 65001 >NUL
-            timeout /t 2 >NUL
+            setlocal enabledelayedexpansion
 
-            rem Backup do exe atual
-            if exist "{exe_atual}" copy /Y "{exe_atual}" "{backup}" > NUL 2>&1
+            echo ===== UPDATE START %DATE% %TIME% ===== > "{log_path}"
+            echo exe_atual="{exe_atual}" >> "{log_path}"
+            echo base_dir="{base_dir}" >> "{log_path}"
+            echo novo="{caminho_novo}" >> "{log_path}"
+            echo backup="{backup}" >> "{log_path}"
 
-            rem Fecha o processo atual
-            taskkill /PID {os.getpid()} /F > NUL 2>&1
-
-            :LOOP
-            del /F /Q "{exe_atual}" > NUL 2>&1
-            if exist "{exe_atual}" (timeout /t 1 >NUL & goto LOOP)
-
-            ren "{caminho_novo}" "{nome_exe}" > NUL 2>&1
-
-            rem Se falhou, tenta rollback
-            if not exist "{exe_atual}" (
-                if exist "{backup}" copy /Y "{backup}" "{exe_atual}" > NUL 2>&1
+            rem 1) Backup
+            if exist "{exe_atual}" (
+                copy /Y "{exe_atual}" "{backup}" >> "{log_path}" 2>&1
             )
 
-            start "" "{exe_atual}"
-            del "%~f0" & exit
+            rem 2) Espera o processo liberar o arquivo (sem taskkill)
+            rem    (como o Python vai sair, o lock deve soltar)
+            timeout /t 1 >NUL
+
+            rem 3) Tenta deletar o exe atual (com retries)
+            set OKDEL=0
+            for /L %%i in (1,1,20) do (
+                del /F /Q "{exe_atual}" >> "{log_path}" 2>&1
+                if not exist "{exe_atual}" (
+                    set OKDEL=1
+                    echo deletou exe na tentativa %%i >> "{log_path}"
+                    goto :DEL_DONE
+                )
+                timeout /t 1 >NUL
+            )
+            :DEL_DONE
+
+            if "!OKDEL!"=="0" (
+                echo FALHA: nao consegui apagar o exe atual >> "{log_path}"
+                goto :ROLLBACK
+            )
+
+            rem 4) Renomeia update_temp.exe -> nome original
+            ren "{caminho_novo}" "{nome_exe}" >> "{log_path}" 2>&1
+
+            if not exist "{exe_atual}" (
+                echo FALHA: ren nao criou o exe novo >> "{log_path}"
+                goto :ROLLBACK
+            )
+
+            rem 5) Sobe o app
+            echo Iniciando exe novo... >> "{log_path}"
+            start "" "{exe_atual}" >> "{log_path}" 2>&1
+
+            echo ===== UPDATE OK %DATE% %TIME% ===== >> "{log_path}"
+            del "%~f0" >> "{log_path}" 2>&1
+            exit
+
+            :ROLLBACK
+            echo Tentando rollback... >> "{log_path}"
+            if exist "{backup}" (
+                copy /Y "{backup}" "{exe_atual}" >> "{log_path}" 2>&1
+                start "" "{exe_atual}" >> "{log_path}" 2>&1
+                echo ===== ROLLBACK OK %DATE% %TIME% ===== >> "{log_path}"
+            ) else (
+                echo ===== ROLLBACK FAIL (sem backup) ===== >> "{log_path}"
+            )
+            del "%~f0" >> "{log_path}" 2>&1
+            exit
         """)
 
-        bat_path = os.path.join(base_dir, "updater.bat")
         with open(bat_path, "w", encoding="utf-8") as f:
             f.write(bat_script)
 
-        subprocess.Popen([bat_path], shell=True, cwd=base_dir)
+        # Executa via cmd (bem mais confiável que rodar .bat direto)
+        subprocess.Popen(["cmd.exe", "/c", bat_path], cwd=base_dir, shell=False)
+
+        # Sai para liberar o lock do exe
         sys.exit()
 
     except Exception as e:
         print(f"{Cores.VERMELHO}Erro no update: {e}{Cores.RESET}")
         input()
+
 
 
 
