@@ -32,6 +32,10 @@ class Cores:
     NEGRITO = '\033[1m'
     ITALICO = '\033[3m'
 
+TENTATIVAS_BLOQUEIO_IP = 0
+MAX_BLOQUEIOS_IP = 3
+
+
 # --- PREMIUM LOGGING FUNCTIONS ---
 def exibir_banner():
     print(f"""{Cores.CIANO}
@@ -185,13 +189,36 @@ def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
     log_erro(f"Falha ao clicar em {nome_elemento}."); return False
 
 def checar_bloqueio_ip(page):
+    global TENTATIVAS_BLOQUEIO_IP
+
     try:
-        if "429" in page.title or "too many requests" in page.ele('tag:body').text.lower():
-            print(f"\n{Cores.VERMELHO}🚨 BLOQUEIO DE IP (429){Cores.RESET}")
+        body_txt = page.ele('tag:body').text.lower()
+        title_txt = page.title.lower() if page.title else ""
+
+        if "429" in title_txt or "too many requests" in body_txt:
+            TENTATIVAS_BLOQUEIO_IP += 1
+
+            print(
+                f"\n{Cores.VERMELHO}🚨 BLOQUEIO DE IP (429) "
+                f"[{TENTATIVAS_BLOQUEIO_IP}/{MAX_BLOQUEIOS_IP}]{Cores.RESET}"
+            )
+
+            if TENTATIVAS_BLOQUEIO_IP >= MAX_BLOQUEIOS_IP:
+                print(f"\n{Cores.VERMELHO}❌ IP BLOQUEADO DEFINITIVAMENTE NESTA EXECUÇÃO{Cores.RESET}")
+                print(f"{Cores.AMARELO}Finalize o script, troque o IP e execute novamente.{Cores.RESET}")
+                page.quit()
+                os._exit(1)  # encerra tudo imediatamente
+
             input(f"\n{Cores.VERDE}>>> Troque o IP e pressione ENTER...{Cores.RESET}")
-            page.refresh(); time.sleep(5); return True
-    except: pass
+            page.refresh()
+            time.sleep(5)
+            return True
+
+    except Exception as e:
+        log_debug(f"Erro checando bloqueio IP: {e}")
+
     return False
+
 
 # --- CLOUDFLARE "OLHOS DE ÁGUIA" (V4.7) ---
 def vencer_cloudflare_obrigatorio(page):
@@ -587,10 +614,10 @@ class ProviderMailTempSite:
 # --- MAIN LOOP ---
 def criar_conta(page, blacklist_global, ultimo_provedor_ok=None):
     garantir_logout(page)
-    dominios_banidos = blacklist_global if isinstance(blacklist_global, set) else set(blacklist_global)
+    dominios_banidos = blacklist_global
     provedores_disponiveis = [ProviderGuerrilla, ProviderMailTM, Provider1SecMail, ProviderMailTempSite]
 
-    # prioriza o provedor que funcionou na última conta
+    # prioriza o provedor "whitelist" (o primeiro que deu bom)
     if ultimo_provedor_ok in provedores_disponiveis:
         provedores_disponiveis = [ultimo_provedor_ok] + [p for p in provedores_disponiveis if p != ultimo_provedor_ok]
     else:
