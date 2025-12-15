@@ -284,13 +284,13 @@ def clicar_botao_otp(page):
         if not btn:
             return False
 
-        try:
-            log_debug(
-                f"OTP btn visible={btn.states.is_displayed} "
-                f"disabled={btn.attr('disabled')}"
-            )
-        except:
-            pass
+        # try:
+        #     log_debug(
+        #         f"OTP btn visible={btn.states.is_displayed} "
+        #         f"disabled={btn.attr('disabled')}"
+        #     )
+        # except:
+        #     pass
 
         try:
             btn.click()
@@ -867,19 +867,30 @@ def main():
     page = ChromiumPage(addr_or_opts=co)
 
     sucessos = 0
+
     for i in range(qtd):
         print(f"\n{Cores.NEGRITO}{Cores.AZUL}=== CONTA {i+1} DE {qtd} ==={Cores.RESET}")
+
         ok, prov_ok = criar_conta(page, blacklist_global, ultimo_provedor_ok)
+
         if ok:
             sucessos += 1
-            ultimo_provedor_ok = prov_ok or ultimo_provedor_ok
+
+            # 🔥 fixa o primeiro provedor bom
+            if ultimo_provedor_ok is None:
+                ultimo_provedor_ok = prov_ok
+
             print(f"{Cores.VERDE}✅ Sucesso!{Cores.RESET}")
         else:
             print(f"{Cores.VERMELHO}❌ Falha.{Cores.RESET}")
-        if i < qtd - 1: barra_progresso(random.randint(15, 25), prefixo='Resfriando', sufixo='s')
+
+        if i < qtd - 1:
+            barra_progresso(random.randint(15, 25), prefixo='Resfriando', sufixo='s')
 
     msg = f"Fim. Sucessos: {sucessos}/{qtd}"
-    print(f"\n{Cores.NEGRITO}=== {msg} ==={Cores.RESET}"); enviar_telegram(msg); page.quit() 
+    print(f"\n{Cores.NEGRITO}=== {msg} ==={Cores.RESET}")
+    enviar_telegram(msg)
+    page.quit()
 
     if sucessos > 0:
         print(f"\n{Cores.CIANO}🚀 Iniciando Farm...{Cores.RESET}"); barra_progresso(15, prefixo='Carregando', sufixo='s')
