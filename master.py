@@ -77,6 +77,7 @@ def definir_titulo():
 try:
     import fabricador
     import checkin_bot_v2
+    import gerador_otp
     MODULOS_OK = True
 except ImportError as e:
     MODULOS_OK = False
@@ -455,7 +456,7 @@ def main():
         else:
             print(f"   {Cores.CINZA}[2] 🔒 Auto Farm (Bloqueado){Cores.RESET}")
 
-        print(f"   {Cores.VERDE}[3]{Cores.RESET} 🔗 Unificar Contas Novas")
+        print(f"   {Cores.VERDE}[3]{Cores.RESET} 🔐 Gerador de OTP (Authenticator)")
         opcoes.append('3')
         
         print(f"\n   {Cores.VERMELHO}[0]{Cores.RESET} Sair")
@@ -482,7 +483,14 @@ def main():
                 input()
 
         elif escolha == '3':
-            unificar_contas()
+            print(f"\n{Cores.CIANO}Abrindo interface segura...{Cores.RESET}")
+            try:
+                gerador_otp.executar()
+                print(f"{Cores.VERDE}Sessão encerrada.{Cores.RESET}")
+                time.sleep(1)
+            except Exception as e:
+                print(f"Erro ao abrir visualizador: {e}")
+                input()
 
         elif escolha == '0':
             print("\nEncerrando sistema...")

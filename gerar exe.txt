@@ -1,1 +1,1 @@
-pyinstaller --noconfirm --onefile --console --name "RagnarokMasterTool" --icon "icon.ico" --clean --hidden-import "fabricador" --hidden-import "checkin_bot_v2" --add-data "version.txt;." master.py
+pyinstaller --noconfirm --onefile --console --name "RagnarokMasterTool" --icon "icon.ico" --add-data "version.txt;." --hidden-import "fabricador" --hidden-import "checkin_bot_v2" --hidden-import "gerador_otp" --collect-all "DrissionPage" "master.py"

@@ -5,10 +5,8 @@ import time
 import random
 import datetime
 import requests
-import subprocess
 import textwrap
 import ctypes
-import shutil
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
@@ -30,11 +28,10 @@ class Cores:
 ARQUIVO_HISTORICO = "historico_diario.json"
 ARQUIVO_CONFIG = "config.json"
 ARQUIVO_CONTAS = "accounts.json"
-URL_LISTA_VIP = "https://gist.githubusercontent.com/iagoferranti/2675637690215af512e1e83e1eaf5e84/raw/emails.json"
 
 LOGS_SESSAO = []
 
-# --- CONFIG MANAGER (PASSIVO) ---
+# --- CONFIG MANAGER ---
 def carregar_config():
     padrao = {"headless": False, "telegram_token": "", "telegram_chat_id": ""}
     if not os.path.exists(ARQUIVO_CONFIG): return padrao 
@@ -47,31 +44,37 @@ def carregar_config():
 
 CONF = carregar_config()
 
-# --- VISUAL PREMIUM ---
+# --- VISUAL & LOGS ---
 def definir_titulo(texto):
     if os.name == 'nt':
-        ctypes.windll.kernel32.SetConsoleTitleW(texto)
+        try: ctypes.windll.kernel32.SetConsoleTitleW(texto)
+        except: pass
 
 def exibir_banner_farm():
     print(f"""{Cores.MAGENTA}
     ╔══════════════════════════════════════════════════════════════╗
-    ║  🎰  R A G N A R O K   A U T O   F A R M   S Y S T E M  🎰   ║
+    ║   🎰  R A G N A R O K   A U T O   F A R M   S Y S T E M  🎰  ║
     ╚══════════════════════════════════════════════════════════════╝
     {Cores.RESET}""")
 
 def log_step(icone, texto, cor=Cores.RESET):
     print(f"   {cor}{icone} {texto}{Cores.RESET}")
 
-# --- TELEGRAM ---
-def enviar_telegram(mensagem):
-    token = CONF.get("telegram_token")
-    chat_id = CONF.get("telegram_chat_id")
-    if not token or not chat_id: return
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        data = {"chat_id": chat_id, "text": mensagem}
-        requests.post(url, data=data, timeout=5)
-    except: pass
+def log_debug(texto):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    print(f"      {Cores.CINZA}[DEBUG {timestamp}] {texto}{Cores.RESET}")
+
+def log_sistema(msg): 
+    print(f"{Cores.CINZA}    └── {msg}{Cores.RESET}")
+
+def log_sucesso(msg): 
+    print(f"{Cores.VERDE} ✅ {Cores.NEGRITO}SUCESSO:{Cores.RESET} {msg}")
+
+def log_aviso(msg): 
+    print(f"{Cores.AMARELO} ⚠️  {Cores.NEGRITO}ALERTA:{Cores.RESET} {msg}")
+
+def log_erro(msg): 
+    print(f"{Cores.VERMELHO} ❌ {Cores.NEGRITO}ERRO:{Cores.RESET} {msg}")
 
 # --- UTILITÁRIOS ---
 def get_base_path():
@@ -83,7 +86,10 @@ def registrar_log(email, status, obs=""):
     linha = f"[{agora}] {email} -> {status} {f'({obs})' if obs else ''}"
     
     cor_status = Cores.VERDE if status in ["SUCESSO", "JÁ FEITO"] else Cores.VERMELHO
+    if status == "EXPIRADO": cor_status = Cores.AMARELO
+    
     icone = "✅" if status in ["SUCESSO", "JÁ FEITO"] else "❌"
+    if status == "EXPIRADO": icone = "⚠️"
     
     print(f"\n   {Cores.NEGRITO}STATUS:{Cores.RESET} {icone} {cor_status}{status}{Cores.RESET}")
     if obs: print(f"   {Cores.CINZA}OBS: {obs}{Cores.RESET}")
@@ -95,13 +101,9 @@ def salvar_arquivo_log():
         base_dir = get_base_path()
         logs_dir = os.path.join(base_dir, "logs")
         if not os.path.exists(logs_dir): os.makedirs(logs_dir)
-
         data_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        nome_arq = f"log_execucao_{data_str}.txt"
-        
-        caminho = os.path.join(logs_dir, nome_arq)
-        with open(caminho, "w", encoding="utf-8") as f: 
-            f.write("\n".join(LOGS_SESSAO))
+        caminho = os.path.join(logs_dir, f"log_execucao_{data_str}.txt")
+        with open(caminho, "w", encoding="utf-8") as f: f.write("\n".join(LOGS_SESSAO))
     except: pass
 
 # --- JSON HELPERS ---
@@ -112,7 +114,7 @@ def carregar_json_seguro(caminho):
     except: return []
 
 def salvar_json_seguro(caminho, dados):
-    try:
+    try: 
         with open(caminho, "w", encoding="utf-8") as f: json.dump(dados, f, indent=4)
     except: pass
 
@@ -128,261 +130,373 @@ def adicionar_ao_historico(email):
     dados = carregar_json_seguro(ARQUIVO_HISTORICO)
     if isinstance(dados, list): dados = {"data": hoje, "contas": []}
     if dados.get("data") != hoje: dados = {"data": hoje, "contas": []}
-    
     if email not in dados["contas"]:
         dados["contas"].append(email)
         salvar_json_seguro(ARQUIVO_HISTORICO, dados)
 
-# --- LICENÇA ---
+def setup_contas():
+    path = os.path.join(get_base_path(), ARQUIVO_CONTAS)
+    contas = carregar_json_seguro(path)
+    if not contas:
+        print(f"\n{Cores.AMARELO}⚠️  Nenhuma conta encontrada em '{ARQUIVO_CONTAS}'!{Cores.RESET}")
+        return []
+    return contas
+
 def verificar_licenca_online(permissao_necessaria="all"):
     try:
         from master import verificar_licenca_online as v
         return v(permissao_necessaria)
     except: return True
 
-# --- INTERFACE ---
-def setup_contas():
-    path = os.path.join(get_base_path(), ARQUIVO_CONTAS)
-    contas = carregar_json_seguro(path)
-    if not contas:
-        print(f"\n{Cores.AMARELO}⚠️  Nenhuma conta encontrada em '{ARQUIVO_CONTAS}'!{Cores.RESET}")
-        time.sleep(3)
-        return []
-    return contas
-
-# --- NAVEGAÇÃO ---
-def descobrir_url_evento(page):
-    path = os.path.join(get_base_path(), "config_evento.json")
-    
-    # 1. Tenta Cache (Válido por 24h)
-    if os.path.exists(path):
+# --- INTERAÇÃO HUMANA ---
+def digitar_como_humano(page, seletor, texto):
+    for tentativa in range(3): # Tenta 3 vezes
         try:
-            with open(path, "r") as f:
-                d = json.load(f)
-                if time.time() - d.get("ts", 0) < 86400: return d['url']
-        except: pass
-        
-    log_step("🔍", "Buscando URL do evento atual...", Cores.CIANO)
-    url_encontrada = None
-    
-    try:
-        # Carrega a home
-        page.get("https://www.gnjoylatam.com/pt")
-        
-        # Tenta fechar popups chatos da home (Opcional, mas ajuda)
-        try:
-            for x in ['text:FECHAR', 'text:Close', '.close_btn', '.modal-close']:
-                if page.ele(x): page.ele(x).click()
-        except: pass
-
-        # ESTRATÉGIA "SNIPER": 
-        # Em vez de clicar, procuramos o link direto no HTML.
-        # Procuramos por texto OU por parte do link (mais seguro)
-        
-        btn = None
-        # Tenta pelo Texto
-        if not btn: btn = page.wait.ele_displayed('text=Máquina PonPon', timeout=5)
-        if not btn: btn = page.wait.ele_displayed('text:PonPon', timeout=2)
-        
-        # Tenta pelo Link (Se mudarem o texto, o link 'roulette' costuma manter)
-        if not btn: btn = page.ele('css:a[href*="roulette"]')
-        if not btn: btn = page.ele('css:a[href*="event"]')
-
-        if btn:
-            # Extrai o link direto do atributo href
-            link_bruto = btn.attr('href')
-            
-            if link_bruto:
-                # Corrige link relativo se necessário
-                if link_bruto.startswith('http'):
-                    url_encontrada = link_bruto
-                else:
-                    url_encontrada = "https://www.gnjoylatam.com" + link_bruto
-                
-                log_step("🎯", f"URL Detectada: {url_encontrada}", Cores.VERDE)
-
-    except Exception as e: 
-        print(f"Erro na detecção: {e}")
-    
-    # Fallback Manual
-    if not url_encontrada:
-        print(f"{Cores.AMARELO}⚠️  Não foi possível detectar automaticamente.{Cores.RESET}")
-        url_encontrada = input("   >> Cole o link do evento: ").strip()
-
-    # Salva no Cache
-    if url_encontrada:
-        try:
-            with open(path, "w") as f: 
-                json.dump({"url": url_encontrada, "ts": time.time()}, f)
-        except: pass
-        
-    return url_encontrada
-
-def fazer_logout(page):
-    try:
-        page.run_cdp('Network.clearBrowserCookies')
-        page.run_cdp('Network.clearBrowserCache')
-    except: pass
-
-def processar_roleta(page):
-    premio_ganho = None
-    try:
-        page.scroll.to_bottom()
-        if page.handle_alert(accept=True): pass
-        
-        ele_count = page.wait.ele_displayed('.styles_attempts_count__iHKXy', timeout=5)
-        if not ele_count: 
-            log_step("🎰", "Roleta não disponível", Cores.CINZA)
-            return None
-        
-        try: qtd = int(ele_count.text)
-        except: qtd = 0
-        
-        if qtd > 0: log_step("🎟️", f"Giros disponíveis: {qtd}", Cores.AMARELO)
-        
-        while qtd > 0:
-            btn = page.ele('@alt=Start')
-            if btn:
-                btn.click()
-                time.sleep(1)
-                if page.handle_alert(accept=True): break
-                
-                ele_premio = page.wait.ele_displayed('.styles_prize_object__LLDTh', timeout=15)
-                if ele_premio:
-                    nm = ele_premio.text
-                    print(f"      {Cores.MAGENTA}★ PRÊMIO:{Cores.RESET} {Cores.NEGRITO}{nm}{Cores.RESET}")
-                    if premio_ganho: premio_ganho += f" + {nm}"
-                    else: premio_ganho = f"Prêmio: {nm}"
-                    time.sleep(2)
-                    try: page.ele('.styles_roulette_btn_close__GzdeD').click()
-                    except: page.ele('tag:body').click()
-                else: break
-                try: qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
-                except: break
-            else: break
-    except: pass
-    return premio_ganho
-
-def vencer_cloudflare_login(page):
-    time.sleep(3)
-    sucesso_visivel = False
-    ele_texto = page.ele('text:Verificação de segurança para acesso concluída')
-    if ele_texto and ele_texto.states.is_displayed: sucesso_visivel = True
-    if not sucesso_visivel:
-        ele_classe = page.ele('.page_success__gilOx')
-        if ele_classe and ele_classe.states.is_displayed: sucesso_visivel = True
-
-    if sucesso_visivel: return
-
-    try: 
-        if page.ele('#email'): page.ele('#email').click()
-        else: page.ele('tag:body').click()
-    except: pass
-    time.sleep(0.5)
-    for _ in range(4):
-        page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
-        time.sleep(0.1)
-    page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
-    time.sleep(5)
-
-# --- 429 PROTECTION ---
-def checar_bloqueio_ip(page):
-    titulo = page.title.lower() if page.title else ""
-    texto_body = page.ele('tag:body').text.lower() if page.ele('tag:body') else ""
-    
-    if "429" in titulo or "too many requests" in texto_body:
-        print(f"\n{Cores.VERMELHO}╔════════════════════════════════════════════════════════════════╗{Cores.RESET}")
-        print(f"{Cores.VERMELHO}║               🚨 BLOQUEIO DE IP DETECTADO (429)                ║{Cores.RESET}")
-        print(f"{Cores.VERMELHO}╚════════════════════════════════════════════════════════════════╝{Cores.RESET}")
-        print(f"\n{Cores.AMARELO}PAUSA DE SEGURANÇA: O servidor bloqueou seu IP.{Cores.RESET}")
-        print(f"👉 Troque sua VPN ou reinicie o modem e pressione ENTER.")
-        input()
-        page.refresh()
-        time.sleep(5)
-        return True
+            ele = page.ele(seletor, timeout=2)
+            if ele and ele.states.is_displayed:
+                ele.click()
+                time.sleep(0.3)
+                ele.clear()
+                time.sleep(0.3)
+                #log_debug(f"Digitando '{texto[:2]}***' em {seletor}")
+                page.actions.type(texto)
+                time.sleep(0.5)
+                return True
+            else:
+                log_debug(f"Elemento {seletor} não visível na tentativa {tentativa+1}")
+        except Exception as e:
+            #log_debug(f"Erro ao digitar: {e}")
+            time.sleep(1.5)
     return False
 
+def interagir_com_seguranca(page, seletor, acao="click", texto=None, timeout=5):
+    inicio = time.time()
+    while time.time() - inicio < timeout:
+        try:
+            ele = page.ele(seletor)
+            if ele and ele.states.is_displayed: 
+                if acao == "click":
+                    #log_debug(f"Clicando em {seletor}")
+                    ele.click()
+                elif acao == "input":
+                    return digitar_como_humano(page, seletor, texto)
+                return True
+        except Exception: 
+            time.sleep(0.5) 
+    #log_debug(f"Falha ao interagir com {seletor}")
+    return False
+
+# --- BROWSER ACTIONS ---
+def fechar_cookies(page):
+    try:
+        if page.ele('.cookieprivacy_btn__Pqz8U', timeout=1): page.ele('.cookieprivacy_btn__Pqz8U').click()
+        elif page.ele('text=concordo.', timeout=1): page.ele('text=concordo.').click()
+    except: pass
+
+def checar_bloqueio_ip(page):
+    try:
+        if "429" in page.title or "too many requests" in page.ele('tag:body').text.lower():
+            print(f"\n{Cores.VERMELHO}🚨 BLOQUEIO DE IP (429){Cores.RESET}")
+            input(f"\n{Cores.VERDE}>>> Troque o IP e pressione ENTER...{Cores.RESET}")
+            page.refresh(); time.sleep(5); return True
+    except: pass
+    return False
+
+# --- CLOUDFLARE "OLHOS DE ÁGUIA" (Portado do Fabricador V4.7) ---
+def vencer_cloudflare_obrigatorio(page):
+    log_sistema("Verificando Cloudflare...")
+    fechar_cookies(page)
+    checar_bloqueio_ip(page)
+    
+    inicio_tentativa = time.time()
+    
+    while time.time() - inicio_tentativa < 50:
+        ele_msg = page.ele('.turnstile_turnstileMessage__grLkv p') or \
+                  page.ele('text:Verificação de segurança para acesso concluída') or \
+                  page.ele('text:Verificando segurança para acesso')
+
+        status_texto = "Desconhecido"
+        if ele_msg and ele_msg.states.is_displayed:
+            status_texto = ele_msg.text
+            #log_debug(f"Status Visual CF: {status_texto}")
+
+        if "concluída" in status_texto.lower() or "sucesso" in status_texto.lower() or "success" in status_texto.lower():
+            log_sucesso("Cloudflare Validado!")
+            time.sleep(1) 
+            return True
+
+        ele_sucesso_icon = page.ele('.page_success__gilOx')
+        if ele_sucesso_icon and ele_sucesso_icon.states.is_displayed:
+             #log_debug("Cloudflare: Ícone de sucesso visível.")
+             log_sucesso("Cloudflare Validado!")
+             return True
+
+        if "verificando" in status_texto.lower() or status_texto == "Desconhecido":
+            # log_sistema("Cloudflare pendente. Tentando manobra (Foco Email -> Shift+Tab)...")
+            
+            if page.ele('#email'):
+                try: 
+                    page.ele('#email').click()
+                    time.sleep(0.2)
+                except: pass
+            else:
+                try: page.ele('tag:body').click()
+                except: pass
+            
+            for _ in range(4):
+                page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
+                time.sleep(0.1)
+            
+            page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
+            time.sleep(4) 
+            continue
+
+        if "insuficiente" in status_texto.lower() or "failed" in status_texto.lower():
+            # log_aviso("Cloudflare detectou falha de segurança (Bloqueio). Recarregando página...")
+            page.refresh()
+            time.sleep(4)
+            continue
+
+        time.sleep(1)
+    
+    log_erro("Timeout no Cloudflare. Não foi possível validar.")
+    return False
+
+def garantir_carregamento(page, seletor_esperado, timeout=30):
+    # log_debug(f"Aguardando elemento: {seletor_esperado}")
+    inicio = time.time()
+    while time.time() - inicio < timeout:
+        try:
+            ele = page.ele(seletor_esperado)
+            if ele and ele.states.is_displayed:
+                return True
+        except: pass 
+            
+        if checar_bloqueio_ip(page):
+            inicio = time.time()
+            continue
+        
+        time.sleep(1)
+    return False
+
+# --- FLUXO 1: HOME PAGE ---
+def preparar_navegador_home(page):
+    try:
+        # log_debug("Limpando cookies...")
+        page.run_cdp('Network.clearBrowserCookies')
+        page.run_cdp('Network.clearBrowserCache')
+        
+        page.get("https://www.gnjoylatam.com/pt")
+        
+        try:
+            for x in ['.close_btn', '.modal-close', 'text:FECHAR']:
+                if page.ele(x, timeout=0.5): page.ele(x).click()
+        except: pass
+
+        if not (page.ele('@alt=LOGIN BUTTON', timeout=1) or page.ele('text:Login', timeout=1) or page.ele('.header_rightlist__btn__5cynY', timeout=1)):
+             btn_logout = page.ele('.header_logoutBtn__6Pv_m', timeout=2)
+             if btn_logout and btn_logout.states.is_displayed:
+                log_step("🧹", "Limpando sessão anterior...", Cores.CINZA)
+                interagir_com_seguranca(page, '.header_logoutBtn__6Pv_m', "click")
+                time.sleep(2)
+        # else:
+            # log_debug("Sessão limpa.")
+
+    except: pass
+
+# --- FLUXO 2: PEGAR URL ---
+def descobrir_url_evento(page):
+    path = os.path.join(get_base_path(), "config_evento.json")
+    if os.path.exists(path):
+        try:
+            d = json.load(open(path)); 
+            if time.time() - d.get("ts", 0) < 86400: return d['url']
+        except: pass
+        
+    log_step("🔍", "Buscando Evento...", Cores.CIANO)
+    url_encontrada = None
+    
+    btn = page.ele('text=Máquina PonPon', timeout=5) or page.ele('text:PonPon', timeout=2)
+    if not btn: 
+        btn = page.ele('css:a[href*="roulette"]', timeout=2) or page.ele('css:a[href*="event"]', timeout=2)
+
+    if btn:
+        l = btn.attr('href')
+        url_encontrada = l if l.startswith('http') else "https://www.gnjoylatam.com" + l
+        log_step("🎯", f"URL: {url_encontrada}", Cores.VERDE)
+        
+    if not url_encontrada:
+        url_encontrada = input(f"{Cores.AMARELO}Link não achado. Cole aqui: {Cores.RESET}").strip()
+        
+    try: json.dump({"url": url_encontrada, "ts": time.time()}, open(path, "w"))
+    except: pass
+    
+    return url_encontrada
+
+# --- FLUXO 4: ROLETA ---
+def processar_roleta(page):
+    premio = None
+    try:
+        page.scroll.to_bottom()
+        if not page.wait.ele_displayed('.styles_attempts_count__iHKXy', timeout=10): return None
+        try: qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
+        except: qtd = 0
+        
+        if qtd > 0: log_step("🎟️", f"Giros: {qtd}", Cores.AMARELO)
+        
+        while qtd > 0:
+            if not interagir_com_seguranca(page, '@alt=Start', "click"): break
+            time.sleep(1)
+            
+            alerta = page.handle_alert(accept=True)
+            if alerta:
+                print(f"      {Cores.AMARELO}⚠️ Alerta: {alerta}{Cores.RESET}")
+                break
+
+            if page.wait.ele_displayed('.styles_prize_object__LLDTh', timeout=20):
+                nm = page.ele('.styles_prize_object__LLDTh').text
+                print(f"      {Cores.MAGENTA}★ PRÊMIO: {Cores.NEGRITO}{nm}{Cores.RESET}")
+                premio = f"Prêmio: {nm}" if not premio else premio + f" + {nm}"
+                time.sleep(2)
+                interagir_com_seguranca(page, '.styles_roulette_btn_close__GzdeD', "click")
+            else: break
+            
+            try: qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
+            except: break
+    except: pass
+    return premio
+
+# --- FLUXO PRINCIPAL DE CONTA ---
 def processar(page, conta, url, index, total):
     email = conta['email']
-    definir_titulo(f"Ragnarok Farm | Conta {index}/{total} | {email}")
+    definir_titulo(f"Farm | {index}/{total} | {email}")
     
-    # --- LÓGICA DE ALINHAMENTO DINÂMICO ---
-    # 1. Monta o texto puro (sem cores) para medir o tamanho real
-    texto_label = f" 👤 CONTA {str(index).zfill(2)}/{str(total).zfill(2)}: "
-    texto_email = f"{email} " # Espaço extra no final
-    texto_completo = texto_label + texto_email
+    txt = f" 👤 CONTA {str(index).zfill(2)}/{str(total).zfill(2)}: {email} "
+    w = max(len(txt), 60)
+    print(f"\n{Cores.AZUL}┌{'─'*w}┐")
+    print(f"│{Cores.RESET}{txt}{' '*(w-len(txt))}{Cores.AZUL}│")
+    print(f"└{'─'*w}┘{Cores.RESET}")
     
-    # 2. Define a largura da caixa (Mínimo 60, ou cresce se o email for gigante)
-    largura_box = max(len(texto_completo), 60)
-    
-    # 3. Calcula preenchimento (padding) para alinhar a borda direita
-    padding = " " * (largura_box - len(texto_completo))
-    
-    # 4. Desenha
-    print(f"\n{Cores.AZUL}┌{'─' * largura_box}┐{Cores.RESET}")
-    # Aqui montamos a linha com as cores certas
-    print(f"{Cores.AZUL}│{Cores.RESET}{texto_label}{Cores.NEGRITO}{texto_email}{Cores.RESET}{padding}{Cores.AZUL}│{Cores.RESET}")
-    print(f"{Cores.AZUL}└{'─' * largura_box}┘{Cores.RESET}")
-    
-    sucesso = False
-    log_status = "ERRO"
+    sucesso_conta = False
+    log_st = "ERRO" 
     msg = ""
     
     try:
-        fazer_logout(page)
+        preparar_navegador_home(page)
         page.get(url)
         time.sleep(2)
-        
         checar_bloqueio_ip(page)
-        
-        if page.wait.ele_displayed('text:Login', timeout=5):
-            page.ele('text:Login').click()
-        elif page.wait.ele_displayed('@alt=LOGIN BUTTON', timeout=5):
-            page.ele('@alt=LOGIN BUTTON').click()
+
+        # CHECK DE LOGIN NO EVENTO
+        if page.ele('@alt=LOGIN BUTTON') or page.ele('text:Login'):
+            # log_debug("Botão de Login encontrado. Iniciando processo...")
             
-        page.wait.url_change('login.gnjoylatam.com', timeout=15)
-        
-        log_step("🛡️", "Bypassing Cloudflare...", Cores.CINZA)
-        vencer_cloudflare_login(page)
-            
-        page.ele('#email').input(email)
-        page.ele('#password').input(conta['password'])
-        time.sleep(1)
-        page.ele('text=CONTINUAR').click()
-        
-        if page.wait.ele_displayed('text:Logout', timeout=30):
-            log_step("🔓", "Login Efetuado", Cores.VERDE)
-            
-            if page.url != url: page.get(url); time.sleep(3)
-            
-            # Checkin
-            page.scroll.to_bottom()
-            btn = page.ele('tag:img@@alt=attendance button')
-            if btn:
-                if "complete" in btn.attr("src"):
-                    log_status = "JÁ FEITO"
-                    log_step("📅", "Check-in já realizado hoje", Cores.AMARELO)
-                    sucesso = True
+            if interagir_com_seguranca(page, '@alt=LOGIN BUTTON', "click") or interagir_com_seguranca(page, 'text:Login', "click"):
+                # log_debug("Botão clicado. Esperando formulário...")
+                
+                if garantir_carregamento(page, '#email', timeout=40):
+                    # log_debug("Formulário carregado.")
+                    
+                    # --- AQUI ESTÁ A CORREÇÃO: OBRIGA O CLOUDFLARE A PASSAR ANTES DE DIGITAR ---
+                    if not vencer_cloudflare_obrigatorio(page):
+                        log_st = "ERRO CF"
+                        log_step("❌", "Falha no Cloudflare", Cores.VERMELHO)
+                        raise Exception("Falha Cloudflare")
+
+                    # AGORA DIGITA COM SEGURANÇA
+                    res_email = digitar_como_humano(page, '#email', email)
+                    res_senha = digitar_como_humano(page, '#password', conta['password'])
+                    
+                    if res_email and res_senha:
+                        time.sleep(1)
+                        try: page.ele('text=Entrar').click() # Tira foco
+                        except: pass
+                        
+                        # log_debug("Enviando Login...")
+                        
+                        # Tenta clicar no botão específico ou dar Enter
+                        clicou_login = False
+                        if interagir_com_seguranca(page, '.page_loginBtn__JUYeS', "click"): clicou_login = True
+                        elif interagir_com_seguranca(page, 'text=CONTINUAR', "click"): clicou_login = True
+                        
+                        if not clicou_login:
+                             page.actions.key_down(Keys.ENTER).key_up(Keys.ENTER)
+                        
+                        # VERIFICA ERROS ANTES DE ESPERAR LOGOUT
+                        time.sleep(3)
+                        erro_login = page.ele('.input_errorMsg__hM_98') or page.ele('text:A segurança para acesso é insuficiente')
+                        if erro_login and erro_login.states.is_displayed:
+                             log_st = "FALHA AUTH"
+                             log_step("❌", f"Erro no site: {erro_login.text}", Cores.VERMELHO)
+                             return False
+
+                        # log_debug("Aguardando confirmação de login...")
+                        if garantir_carregamento(page, 'text:Logout', timeout=60):
+                            log_step("🔓", "Login Efetuado", Cores.VERDE)
+                            
+                            if "event" not in page.url: 
+                                page.get(url); time.sleep(3)
+                            
+                            # CHECK-IN
+                            page.scroll.to_bottom()
+                            btn_check = page.ele('tag:img@@alt=attendance button')
+                            if not btn_check: btn_check = page.ele('text:FAZER CHECK-IN')
+                            
+                            if btn_check:
+                                if "complete" in str(btn_check.attr("src")):
+                                    log_st = "JÁ FEITO"
+                                    log_step("📅", "Check-in já feito hoje", Cores.AMARELO)
+                                    sucesso_conta = True
+                                else:
+                                    # log_debug("Clicando Check-in...")
+                                    btn_check.click()
+                                    time.sleep(1)
+                                    
+                                    alerta = page.handle_alert(accept=True)
+                                    if alerta:
+                                        log_step("⚠️", f"Aviso: {alerta}", Cores.AMARELO)
+                                        if "período" in alerta.lower() or "not" in alerta.lower():
+                                            log_st = "EXPIRADO"; msg = alerta
+                                        else:
+                                            log_st = "ALERTA"; msg = alerta
+                                    else:
+                                        time.sleep(2)
+                                        log_st = "SUCESSO"
+                                        log_step("📅", "Check-in realizado!", Cores.VERDE)
+                                        sucesso_conta = True
+                            
+                            p = processar_roleta(page)
+                            if p: msg = p
+                            
+                            log_step("👋", "Saindo da conta...", Cores.CINZA)
+                            interagir_com_seguranca(page, 'text:Logout', "click")
+                            page.wait.ele_displayed('@alt=LOGIN BUTTON', timeout=15)
+                            
+                        else:
+                            log_st = "FALHA LOGIN"
+                            log_step("❌", "Não logou (Timeout)", Cores.VERMELHO)
+                    else:
+                         log_st = "ERRO DIGITACAO"
                 else:
-                    btn.click()
-                    time.sleep(4)
-                    log_status = "SUCESSO"
-                    log_step("📅", "Check-in realizado!", Cores.VERDE)
-                    sucesso = True
-            
-            # Roleta
-            p = processar_roleta(page)
-            if p: msg = p
+                    log_st = "ERRO SSO"
+                    log_step("❌", "Formulário não carregou", Cores.VERMELHO)
+        
+        elif page.ele('text:Logout') or page.ele('.page_login__g41B0'):
+            log_step("⚠️", "Já estava logado. Considere limpar cookies.", Cores.AMARELO)
+            interagir_com_seguranca(page, 'text:Logout', "click")
             
         else:
-            log_status = "FALHA LOGIN"
-            
+             log_st = "ERRO NAV"
+             log_step("❌", "Estado da página desconhecido", Cores.VERMELHO)
+
     except Exception as e:
         msg = str(e)
+        log_debug(f"Exception: {e}")
     
-    registrar_log(email, log_status, msg)
-    if sucesso: adicionar_ao_historico(email)
-    fazer_logout(page)
+    registrar_log(email, log_st, msg)
+    if sucesso_conta: adicionar_ao_historico(email)
+    
+    return sucesso_conta 
 
 def main():
     if not verificar_licenca_online("checkin"): return
@@ -396,20 +510,11 @@ def main():
     co = ChromiumOptions()
     co.set_argument('--start-maximized') 
     co.set_argument('--window-size=1920,1080')
-    co.set_argument('--force-device-scale-factor=0.8')
+    if CONF.get("headless", False): co.headless(True)
     
-    if CONF.get("headless", False):
-        print(f"{Cores.AMARELO}⚠️  Modo Invisível (Headless) Ativo{Cores.RESET}")
-        co.headless(True)
-        
     page = ChromiumPage(addr_or_opts=co)
-    
-    # === FORÇA MAXIMIZAR DE VERDADE ===
-    try: 
-        page.set.window.max()
-    except: 
-        # Fallback se maximizar falhar
-        page.set.window.size(1920, 1080)
+    try: page.set.window.max()
+    except: pass
 
     url = descobrir_url_evento(page)
     ja_foi = carregar_historico_hoje()
@@ -419,30 +524,21 @@ def main():
     time.sleep(2)
     
     count_sucesso = 0
-    total_exec = len(contas_para_fazer)
-    
     for i, acc in enumerate(contas_para_fazer):
-        processar(page, acc, url, i+1, total_exec)
-        count_sucesso += 1
-        
-        if i < total_exec - 1:
+        if processar(page, acc, url, i+1, len(contas_para_fazer)):
+            count_sucesso += 1
+            
+        if i < len(contas_para_fazer) - 1:
             t = random.randint(5, 12)
-            print(f"\n{Cores.CINZA}⏳ Aguardando {t}s para próxima conta...{Cores.RESET}")
+            print(f"\n{Cores.CINZA}⏳ Aguardando {t}s...{Cores.RESET}")
             time.sleep(t)
         
-    msg_fim = f"FARM FINALIZADO - {count_sucesso} CONTAS PROCESSADAS"
-    
-    # --- CORREÇÃO DO ERRO DE STR + INT ---
-    tam_linha = len(msg_fim) + 4
-    print(f"\n{Cores.VERDE}╔{'═' * tam_linha}╗")
-    print(f"║  {msg_fim}  ║")
-    print(f"╚{'═' * tam_linha}╝{Cores.RESET}")
-    
+    msg = f"FARM FINALIZADO - {count_sucesso} SUCESSOS"
+    print(f"\n{Cores.VERDE}╔{'═'*(len(msg)+4)}╗\n║  {msg}  ║\n╚{'═'*(len(msg)+4)}╝{Cores.RESET}")
     salvar_arquivo_log()
-    enviar_telegram(msg_fim)
-    
+    # enviar_telegram(msg)
     page.quit()
-    input("\nPressione Enter para voltar ao menu...")
+    input("\nEnter para voltar...")
 
 def executar(): main()
 

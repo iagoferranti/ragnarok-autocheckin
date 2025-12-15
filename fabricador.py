@@ -36,7 +36,7 @@ class Cores:
 def exibir_banner():
     print(f"""{Cores.CIANO}
     ╔══════════════════════════════════════════════════════════════╗
-    ║  🏭  R A G N A R O K   A C C O U N T   F A C T O R Y  🏭     ║
+    ║      🏭   R A G N A R O K   A C C O U N T   F A C T O R Y    ║
     ╚══════════════════════════════════════════════════════════════╝
     {Cores.RESET}""")
 
@@ -56,7 +56,8 @@ def log_sistema(msg):
     print(f"{Cores.CINZA}    └── {msg}{Cores.RESET}")
 
 def log_debug(msg): 
-    print(f"{Cores.CINZA}    [DEBUG] {msg}{Cores.RESET}")
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"{Cores.CINZA}    [DEBUG {ts}] {msg}{Cores.RESET}")
 
 def barra_progresso(tempo_total, prefixo='', sufixo='', comprimento=30, preenchimento='█'):
     """Exibe uma barra de progresso visual"""
@@ -76,16 +77,10 @@ def barra_progresso(tempo_total, prefixo='', sufixo='', comprimento=30, preenchi
 # --- CONFIG LOADER ---
 def carregar_config():
     config_padrao = {
-        "licenca_email": "",
-        "headless": False,
-        "tag_email": "rag",
-        "sobrenome_padrao": "Silva",
-        "telegram_token": "",
-        "telegram_chat_id": ""
+        "licenca_email": "", "headless": False, "tag_email": "rag",
+        "sobrenome_padrao": "Silva", "telegram_token": "", "telegram_chat_id": ""
     }
-    if not os.path.exists(ARQUIVO_CONFIG):
-        return config_padrao 
-
+    if not os.path.exists(ARQUIVO_CONFIG): return config_padrao 
     try:
         with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
             user_config = json.load(f)
@@ -95,21 +90,14 @@ def carregar_config():
 
 CONF = carregar_config()
 
-try:
-    import pyotp
-    TEM_PYOTP = True
-except ImportError:
-    TEM_PYOTP = False
+try: import pyotp; TEM_PYOTP = True
+except ImportError: TEM_PYOTP = False
 
 # --- TELEGRAM ---
 def enviar_telegram(mensagem):
-    token = CONF.get("telegram_token")
-    chat_id = CONF.get("telegram_chat_id")
+    token = CONF.get("telegram_token"); chat_id = CONF.get("telegram_chat_id")
     if not token or not chat_id: return
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        data = {"chat_id": chat_id, "text": mensagem}
-        requests.post(url, data=data, timeout=5)
+    try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": mensagem}, timeout=5)
     except: pass
 
 # --- FILES MANAGEMENT ---
@@ -121,16 +109,17 @@ def carregar_json_seguro(caminho):
 
 def salvar_json_seguro(caminho, dados):
     try:
-        with open(caminho, "w", encoding="utf-8") as f:
-            json.dump(dados, f, indent=4, ensure_ascii=False)
+        with open(caminho, "w", encoding="utf-8") as f: json.dump(dados, f, indent=4, ensure_ascii=False)
         return True
     except: return False
 
-def consolidar_conta_no_principal(email, senha):
+def consolidar_conta_no_principal(email, senha, seed=None):
     contas = carregar_json_seguro(ARQUIVO_PRINCIPAL)
     for c in contas:
         if c.get('email') == email: return
-    contas.append({"email": email, "password": senha})
+    nova_conta = {"email": email, "password": senha}
+    if seed: nova_conta["seed_otp"] = seed
+    contas.append(nova_conta)
     salvar_json_seguro(ARQUIVO_PRINCIPAL, contas)
 
 def salvar_conta_backup(email, senha, seed, status="PRONTA_PARA_FARMAR"):
@@ -150,45 +139,35 @@ def get_base_path():
 # --- UTILS ---
 def gerar_senha_ragnarok():
     chars = string.ascii_letters + string.digits + "!@#$"
-    senha = [
-        random.choice(string.ascii_uppercase),
-        random.choice(string.ascii_lowercase),
-        random.choice(string.digits),
-        random.choice("!@#$"),
-    ]
-    senha += random.choices(chars, k=8)
-    random.shuffle(senha)
+    senha = [random.choice(string.ascii_uppercase), random.choice(string.ascii_lowercase), random.choice(string.digits), random.choice("!@#$")]
+    senha += random.choices(chars, k=8); random.shuffle(senha)
     return "".join(senha)
 
-def delay_humano():
-    time.sleep(random.uniform(0.8, 1.5))
+def delay_humano(): time.sleep(random.uniform(0.8, 1.5))
 
-# --- TEXT PROCESSING ---
-def limpar_html(texto_html):
-    clean = re.compile('<.*?>')
-    return re.sub(clean, ' ', texto_html)
+def limpar_html(texto_html): return re.sub(re.compile('<.*?>'), ' ', texto_html)
 
 def extrair_codigo_seguro(texto_bruto):
     if not texto_bruto: return None
-    texto_limpo = limpar_html(texto_bruto)
-    match = re.search(r'C[oó]digo de Verificaç[aã]o.*?([A-Za-z0-9]{6})', texto_limpo, re.IGNORECASE | re.DOTALL)
-    
+    match = re.search(r'C[oó]digo de Verificaç[aã]o.*?([A-Za-z0-9]{6})', limpar_html(texto_bruto), re.IGNORECASE | re.DOTALL)
     if match:
         codigo = match.group(1).strip()
-        palavras_proibidas = ['abaixo', 'assets', 'height', 'width', 'style', 'follow', 'codigo', 'verify', 'click', 'button', 'target', 'class', 'border']
-        if codigo.lower() in palavras_proibidas: return None
+        if codigo.lower() in ['abaixo', 'assets', 'height', 'width', 'style']: return None
         return codigo
     return None
+
+def diagnostico_pagina(page):
+    try:
+        url = page.url
+        titulo = page.title
+        # log_debug(f"Página Atual: {url} | Título: {titulo}")
+    except: pass
 
 # --- BROWSER ACTIONS ---
 def fechar_cookies(page):
     try:
-        # Only click if visible
-        btn = page.ele('.cookieprivacy_btn__Pqz8U')
-        if btn and btn.states.is_displayed:
-            btn.click()
-        elif page.ele('text=concordo.'):
-            page.ele('text=concordo.').click()
+        if page.ele('.cookieprivacy_btn__Pqz8U', timeout=1): page.ele('.cookieprivacy_btn__Pqz8U').click()
+        elif page.ele('text=concordo.', timeout=1): page.ele('text=concordo.').click()
     except: pass
 
 def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
@@ -196,103 +175,101 @@ def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
         try:
             btn = page.wait.ele_displayed(seletor, timeout=TIMEOUT_PADRAO)
             if btn:
-                page.scroll.to_see(btn)
-                delay_humano()
-                btn.click()
-                return True
+                page.scroll.to_see(btn); delay_humano(); btn.click(); return True
         except:
             try:
                 btn = page.ele(seletor)
-                if btn:
-                    page.run_js("arguments[0].click()", btn)
-                    return True
+                if btn: page.run_js("arguments[0].click()", btn); return True
             except: pass
             time.sleep(1)
-    
-    log_erro(f"Falha ao clicar em {nome_elemento}.")
-    return False
+    log_erro(f"Falha ao clicar em {nome_elemento}."); return False
 
-# --- ANTI-BLOCKING ---
 def checar_bloqueio_ip(page):
-    """Verifies if 429 error occurred and pauses execution"""
-    titulo = page.title.lower() if page.title else ""
-    texto_body = page.ele('tag:body').text.lower() if page.ele('tag:body') else ""
-    
-    if "429" in titulo or "too many requests" in texto_body or "bloqueado" in texto_body:
-        print(f"\n{Cores.VERMELHO}╔════════════════════════════════════════════════════════════════╗{Cores.RESET}")
-        print(f"{Cores.VERMELHO}║               🚨 BLOQUEIO DE IP DETECTADO (429)                ║{Cores.RESET}")
-        print(f"{Cores.VERMELHO}╚════════════════════════════════════════════════════════════════╝{Cores.RESET}")
-        print(f"\n{Cores.AMARELO}O servidor bloqueou seu IP temporariamente por excesso de tentativas.{Cores.RESET}")
-        print(f"\n{Cores.NEGRITO}AÇÕES RECOMENDADAS:{Cores.RESET}")
-        print(f"  1. 🔄 {Cores.CIANO}Reinicie seu Modem{Cores.RESET} (para renovar IP).")
-        print(f"  2. 🛡️ {Cores.CIANO}Ligue ou Troque sua VPN{Cores.RESET}.")
-        print(f"  3. ⏳ {Cores.CIANO}Aguarde 1 hora{Cores.RESET} e tente novamente.")
-        
-        input(f"\n{Cores.VERDE}>>> Após resolver, pressione ENTER para retomar...{Cores.RESET}")
-        
-        # Try refreshing to see if unblocked
-        page.refresh()
-        time.sleep(5)
-        return True 
+    try:
+        if "429" in page.title or "too many requests" in page.ele('tag:body').text.lower():
+            print(f"\n{Cores.VERMELHO}🚨 BLOQUEIO DE IP (429){Cores.RESET}")
+            input(f"\n{Cores.VERDE}>>> Troque o IP e pressione ENTER...{Cores.RESET}")
+            page.refresh(); time.sleep(5); return True
+    except: pass
     return False
 
-def vencer_cloudflare(page, checar_cookies=True):
-    if checar_cookies: fechar_cookies(page)
-    
-    log_sistema("Analisando Cloudflare...")
-    time.sleep(5) 
-    
-    # Check for blocking inside Cloudflare page too
+# --- CLOUDFLARE "OLHOS DE ÁGUIA" (V4.7) ---
+def vencer_cloudflare_obrigatorio(page):
+    log_sistema("Verificando Cloudflare...")
+    fechar_cookies(page)
     checar_bloqueio_ip(page)
-
-    # 1. VISIBLE SUCCESS CHECK
-    sucesso_visivel = False
     
-    ele_texto = page.ele('text:Verificação de segurança para acesso concluída')
-    if ele_texto and ele_texto.states.is_displayed:
-        sucesso_visivel = True
-        
-    if not sucesso_visivel:
-        ele_classe = page.ele('.page_success__gilOx')
-        if ele_classe and ele_classe.states.is_displayed:
-            sucesso_visivel = True
-
-    if sucesso_visivel:
-        return # Success
-
-    # 2. IF NOT VISIBLE, ATTEMPT MANEUVER
-    log_sistema(f"Aplicando manobra de bypass...")
+    inicio_tentativa = time.time()
     
-    # Focus on initial element
-    if page.ele('#email'):
-        try: page.ele('#email').click()
-        except: pass
-    else:
-        try: page.ele('tag:body').click()
-        except: pass
-        
-    time.sleep(0.5)
+    while time.time() - inicio_tentativa < 50:
+        ele_msg = page.ele('.turnstile_turnstileMessage__grLkv p') or \
+                  page.ele('text:Verificação de segurança para acesso concluída') or \
+                  page.ele('text:Verificando segurança para acesso')
 
-    # Gold Sequence: 4x Shift+Tab + Space
-    for _ in range(4):
-        page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
-        time.sleep(0.1)
-    
-    page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
-    
-    # time.sleep(5)
+        status_texto = "Desconhecido"
+        if ele_msg and ele_msg.states.is_displayed:
+            status_texto = ele_msg.text
+            # log_debug(f"Status Visual CF: {status_texto}")
 
-# --- SESSION CLEANUP ---
+        if "concluída" in status_texto.lower() or "sucesso" in status_texto.lower() or "success" in status_texto.lower():
+            log_sucesso("Cloudflare Validado!")
+            time.sleep(1) 
+            return True
+
+        ele_sucesso_icon = page.ele('.page_success__gilOx')
+        if ele_sucesso_icon and ele_sucesso_icon.states.is_displayed:
+            #  log_debug("Cloudflare: Ícone de sucesso visível.")
+             log_sucesso("Cloudflare Validado!")
+             return True
+
+        if "verificando" in status_texto.lower() or status_texto == "Desconhecido":
+            # log_sistema("Cloudflare pendente. Tentando manobra (Foco Email -> Shift+Tab)...")
+            
+            if page.ele('#email'):
+                try: 
+                    page.ele('#email').click()
+                    time.sleep(0.2)
+                except: pass
+            else:
+                try: page.ele('tag:body').click()
+                except: pass
+            
+            for _ in range(4):
+                page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
+                time.sleep(0.1)
+            
+            page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
+            time.sleep(4) 
+            continue
+
+        if "insuficiente" in status_texto.lower() or "failed" in status_texto.lower():
+            log_aviso("Cloudflare detectou falha de segurança (Bloqueio). Recarregando página...")
+            page.refresh()
+            time.sleep(4)
+            continue
+
+        time.sleep(1)
+    
+    log_erro("Timeout no Cloudflare. Não foi possível validar.")
+    return False
+
+def garantir_carregamento(page, seletor_esperado, timeout=30):
+    inicio = time.time()
+    while time.time() - inicio < timeout:
+        if page.ele(seletor_esperado) and page.ele(seletor_esperado).states.is_displayed:
+            return True
+        if checar_bloqueio_ip(page):
+            inicio = time.time()
+            continue
+        time.sleep(1)
+    return False
+
 def garantir_logout(page):
-    """Ensures session is clean before starting"""
     try:
-        # 1. Technical cleanup
         page.run_cdp('Network.clearBrowserCookies')
         page.run_cdp('Network.clearBrowserCache')
         page.run_js('localStorage.clear(); sessionStorage.clear();')
     except: pass
-
-    # 2. Visual cleanup
     try:
         btn_logout = page.ele('.header_logoutBtn__6Pv_m')
         if btn_logout:
@@ -301,69 +278,232 @@ def garantir_logout(page):
             time.sleep(3)
     except: pass
 
-# ================= EMAIL PROVIDERS =================
+def clicar_botao_otp(page):
+    try:
+        btn = page.wait.ele_displayed('css:button.page_otp_status_btn__DulWo.page_otp_join_btn__KKBJq', timeout=15)
+        if not btn:
+            return False
 
+        try:
+            log_debug(
+                f"OTP btn visible={btn.states.is_displayed} "
+                f"disabled={btn.attr('disabled')}"
+            )
+        except:
+            pass
+
+        try:
+            btn.click()
+            return True
+        except:
+            pass
+
+        try:
+            page.run_js("arguments[0].click()", btn)
+            return True
+        except:
+            return False
+    except:
+        return False
+
+def capturar_erro_email(page):
+    # tenta primeiro os elementos de erro
+    seletores = [
+        '.mailauth_errorMessage__Umj_A',
+        '.input_errorMsg__hM_98',
+    ]
+
+    deadline = time.time() + 4
+    while time.time() < deadline:
+        textos = []
+
+        # 1) pega textos de elementos de erro
+        for sel in seletores:
+            try:
+                el = page.ele(sel, timeout=0.2)
+                if el and el.states.is_displayed:
+                    t = (el.text or "").strip()
+                    if t:
+                        textos.append(t)
+            except:
+                pass
+
+        # 2) fallback: body (pra erros sem classe estável)
+        try:
+            body = (page.ele('tag:body').text or "").strip()
+            if body:
+                textos.append(body)
+        except:
+            pass
+
+        # normaliza e tenta mapear
+        joined = " | ".join(textos)
+        low = joined.lower()
+
+        # ✅ MAPEAMENTOS IMPORTANTES
+        if "não pode ser utilizado" in low or "nao pode ser utilizado" in low:
+            return "EMAIL_INVALIDO", "Este endereço de e-mail não pode ser utilizado."
+        if "não é possível se cadastrar com este domínio" in low or "domínio de e-mail" in low or "dominio de e-mail" in low:
+            return "DOMINIO_BLOQUEADO", "Domínio bloqueado para cadastro."
+        if "segurança" in low and ("insuficiente" in low or "failed" in low):
+            return "SEGURANCA_INSUFICIENTE", "Falha de segurança / Cloudflare."
+        if "em uso" in low or "já está em uso" in low or "ja esta em uso" in low:
+            return "EMAIL_EM_USO", "E-mail já está em uso."
+
+        time.sleep(0.2)
+
+    return None, ""
+
+
+
+
+# ================= EMAIL PROVIDERS =================
 class EmailSession:
     def __init__(self):
-        self.email = None; self.senha_api = "Senha123"; self.token = None 
-        self.login_1sec = None; self.domain_1sec = None; self.provider_name = ""
+        self.email = None
+        self.senha_api = "Senha123"
+        self.token = None
+        self.sid_token = None
+        self.login_1sec = None
+        self.domain_1sec = None
+        self.provider_name = ""
         self.primeiro_nome = "Jose"
-        self.session_requests = None 
+        self.session_requests = None
+
+
+GUERRILLA_DOMINIOS_BONS = [
+    "sharklasers.com",
+    "grr.la",
+    "guerrillamail.com",
+    "guerrillamail.net",
+    "guerrillamail.org",
+    "guerrillamail.info",
+    "guerrillamail.biz",
+    "guerrillamail.de",
+    # deixe guerrillamailblock.com por último, se quiser manter como fallback
+    "guerrillamailblock.com",
+]
+
+def testar_guerrilla_funcional(session, tentativas=2, timeout=5):
+    """
+    Testa se a API do Guerrilla responde corretamente.
+    Não precisa receber email real, só validar resposta.
+    """
+    for _ in range(tentativas):
+        try:
+            r = session.get(
+                "https://api.guerrillamail.com/ajax.php?f=check_email&seq=0",
+                timeout=timeout
+            )
+            if r.status_code == 200 and isinstance(r.json(), dict):
+                return True
+        except:
+            time.sleep(1)
+    return False
+
 
 class ProviderGuerrilla:
-    def gerar(self):
+    def gerar(self, banidos=[]):
         obj = EmailSession()
         obj.provider_name = "GuerrillaMail"
         obj.session_requests = requests.Session()
+
         tag = CONF.get("tag_email", "rag")
-        try:
-            r = obj.session_requests.get("https://api.guerrillamail.com/ajax.php?f=get_email_address", timeout=10)
-            data = r.json()
-            
-            sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-            user_novo = f"{tag}_{sulfixo}"
-            
-            r_set = obj.session_requests.get(f"https://api.guerrillamail.com/ajax.php?f=set_email_user&email_user={user_novo}&lang=en", timeout=10)
-            
-            if r_set.status_code == 200 and 'email_addr' in r_set.json():
-                obj.email = r_set.json()['email_addr']
-            else: obj.email = data['email_addr']
-            return obj
-        except: return None
+
+        s = obj.session_requests
+
+        if not testar_guerrilla_funcional(s):
+            return None
+
+        # escolhe domínio “bom” (não banido) — se sobrar só block, ele entra como fallback
+        banidos = set([b.lower() for b in banidos])
+        dominios = [d for d in GUERRILLA_DOMINIOS_BONS if d.lower() not in banidos]
+        if not dominios:
+            return None
+
+        for i in range(6):
+            try:
+                # pega sid_token (quando existir)
+                r0 = s.get("https://api.guerrillamail.com/ajax.php?f=get_email_address", timeout=10)
+                j0 = r0.json() if r0.status_code == 200 else {}
+                obj.sid_token = j0.get("sid_token") or obj.sid_token
+
+                sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                user_novo = f"{tag}_{sulfixo}"
+                dominio = random.choice(dominios)
+
+                # FORÇA domínio aqui
+                url = (
+                    "https://api.guerrillamail.com/ajax.php"
+                    f"?f=set_email_user&email_user={user_novo}&domain={dominio}&lang=en"
+                )
+                # se sid_token existir, inclui (ajuda muito na consistência)
+                if obj.sid_token:
+                    url += f"&sid_token={obj.sid_token}"
+
+                r_set = s.get(url, timeout=10)
+                j = r_set.json() if r_set.status_code == 200 else {}
+
+                email_final = j.get("email_addr") or ""
+                if not email_final:
+                    continue
+
+                dom = email_final.split("@", 1)[1].lower()
+
+                log_debug(f"Guerrilla gerou: {email_final} | sid_token={'OK' if obj.sid_token else 'NONE'}")
+
+
+                if dom in banidos:
+                    continue
+
+                obj.email = email_final
+                return obj
+
+            except:
+                time.sleep(1)
+
+        return None
 
     def esperar_codigo(self, obj, filtro):
         try:
-            r = obj.session_requests.get(f"https://api.guerrillamail.com/ajax.php?f=check_email&seq=0", timeout=10)
+            url = "https://api.guerrillamail.com/ajax.php?f=check_email&seq=0"
+            if obj.sid_token:
+                url += f"&sid_token={obj.sid_token}"
+
+            r = obj.session_requests.get(url, timeout=10)
             if r.status_code == 200:
-                data = r.json()
-                lista = data.get('list', [])
-                for msg in lista:
-                    if filtro.lower() in msg['mail_subject'].lower():
-                        mid = msg['mail_id']
-                        r_fetch = obj.session_requests.get(f"https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id={mid}", timeout=10)
-                        if r_fetch.status_code == 200:
-                            return r_fetch.json().get('mail_body', '')
-        except: pass
+                for msg in r.json().get('list', []):
+                    if filtro.lower() in msg.get('mail_subject', '').lower():
+                        mail_id = msg.get('mail_id')
+                        if not mail_id:
+                            continue
+                        url2 = f"https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id={mail_id}"
+                        if obj.sid_token:
+                            url2 += f"&sid_token={obj.sid_token}"
+                        r2 = obj.session_requests.get(url2, timeout=10)
+                        j2 = r2.json() if r2.status_code == 200 else {}
+                        return j2.get('mail_body', '')
+        except:
+            pass
         return None
 
 class ProviderMailTM:
-    def gerar(self):
-        obj = EmailSession(); obj.provider_name = "Mail.tm"
-        tag = CONF.get("tag_email", "rag")
+    def gerar(self, banidos=[]):
+        obj = EmailSession(); obj.provider_name = "Mail.tm"; tag = CONF.get("tag_email", "rag")
         try:
             r = requests.get("https://api.mail.tm/domains", timeout=5)
             doms = r.json()['hydra:member']
-            coms = [d['domain'] for d in doms if d['domain'].endswith(".com")]
-            domain = random.choice(coms) if coms else random.choice(doms)['domain']
-            
+            disponiveis = [d['domain'] for d in doms if d['domain'] not in banidos]
+            if not disponiveis:
+                log_debug("MailTM: Todos os domínios estão banidos nesta sessão.")
+                return None
+            coms = [d for d in disponiveis if d.endswith(".com")]
+            domain = random.choice(coms) if coms else random.choice(disponiveis)
             sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
             obj.email = f"{tag}_{sulfixo}@{domain}"
-            
             requests.post("https://api.mail.tm/accounts", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
             r_tok = requests.post("https://api.mail.tm/token", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
-            if r_tok.status_code == 200:
-                obj.token = r_tok.json()['token']
-                return obj
+            if r_tok.status_code == 200: obj.token = r_tok.json()['token']; return obj
         except: pass
         return None
 
@@ -381,20 +521,22 @@ class ProviderMailTM:
         return None
 
 class Provider1SecMail:
-    def gerar(self):
-        obj = EmailSession(); obj.provider_name = "1secmail"
-        tag = CONF.get("tag_email", "rag")
+    def gerar(self, banidos=[]):
+        obj = EmailSession(); obj.provider_name = "1secmail"; tag = CONF.get("tag_email", "rag")
         try:
             r = requests.get("https://www.1secmail.com/api/v1/?action=getDomainList", timeout=5)
             if r.status_code == 200:
                 doms = r.json()
-                bons = [d for d in doms if d.endswith(".com")]
-                obj.domain_1sec = random.choice(bons) if bons else "esiix.com"
-            else: obj.domain_1sec = "esiix.com"
-            
+                bons = [d for d in doms if d not in banidos]
+                if not bons: 
+                    log_debug("1SecMail: Todos domínios banidos.")
+                    return None
+                obj.domain_1sec = random.choice(bons)
+            else: 
+                if "esiix.com" not in banidos: obj.domain_1sec = "esiix.com"
+                else: return None
             sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
             obj.login_1sec = f"{tag}_{sulfixo}"
-            
             obj.email = f"{obj.login_1sec}@{obj.domain_1sec}"
             return obj
         except: return None
@@ -411,164 +553,263 @@ class Provider1SecMail:
         except: pass
         return None
 
-# --- MAIN LOOP ---
-def criar_conta(page):
-    garantir_logout(page)
+class ProviderMailTempSite:
+    def gerar(self, banidos=[]):
+        obj = EmailSession(); obj.provider_name = "MailTempSite"; tag = CONF.get("tag_email", "rag")
+        try:
+            r = requests.get("https://mail-temp.site/list_domain.php", timeout=5)
+            data = r.json()
+            if data.get('success'):
+                doms = [d for d in data.get('domains', []) if d not in banidos]
+                if not doms: return None
+                domain = random.choice(doms)
+                sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                obj.email = f"{tag}_{sulfixo}@{domain}"
+                return obj
+        except: pass
+        return None
 
-    for tentativa in range(3):
-        if tentativa > 0:
-            print(f"\n{Cores.AMARELO}♻️  Alternando Provedor (Tentativa {tentativa+1})...{Cores.RESET}")
+    def esperar_codigo(self, obj, filtro):
+        try:
+            url = f"https://mail-temp.site/checkmail.php?mail={obj.email}"
+            r = requests.get(url, timeout=5)
+            data = r.json()
+            if data.get('success'):
+                for msg in data.get('emails', []):
+                    if filtro.lower() in msg['subject'].lower():
+                        r2 = requests.get(f"https://mail-temp.site/viewmail.php?id={msg['id']}", timeout=5)
+                        data2 = r2.json()
+                        if data2.get('success'):
+                            return data2['email'].get('body', '')
+        except: pass
+        return None
+
+# --- MAIN LOOP ---
+def criar_conta(page, blacklist_global, ultimo_provedor_ok=None):
+    garantir_logout(page)
+    dominios_banidos = blacklist_global if isinstance(blacklist_global, set) else set(blacklist_global)
+    provedores_disponiveis = [ProviderGuerrilla, ProviderMailTM, Provider1SecMail, ProviderMailTempSite]
+
+    # prioriza o provedor que funcionou na última conta
+    if ultimo_provedor_ok in provedores_disponiveis:
+        provedores_disponiveis = [ultimo_provedor_ok] + [p for p in provedores_disponiveis if p != ultimo_provedor_ok]
+    else:
+        random.shuffle(provedores_disponiveis)
+
+
+    contador_tentativas = 0
+    
+    while contador_tentativas < 15:
+        if contador_tentativas > 0:
+            print(f"\n{Cores.AMARELO}♻️  Nova Tentativa ({contador_tentativas+1})...{Cores.RESET}")
             garantir_logout(page)
             
-        if tentativa == 0: prov = ProviderGuerrilla()
-        elif tentativa == 1: prov = ProviderMailTM()
-        else: prov = Provider1SecMail()
-            
-        log_info(f"Gerando identidade via: {Cores.MAGENTA}{prov.__class__.__name__}{Cores.RESET}...")
+        prov_class = provedores_disponiveis[contador_tentativas % len(provedores_disponiveis)]
+        log_info(f"Gerando identidade via: {Cores.MAGENTA}{prov_class.__name__}{Cores.RESET}...")
         
-        obj = prov.gerar()
+        prov = prov_class()
+        obj = prov.gerar(banidos=list(dominios_banidos))
         
-        if not obj: continue
+        if not obj:
+            log_debug("Provedor não tem domínios disponíveis/limpos. Trocando...")
+            contador_tentativas += 1
+            continue
 
         log_sucesso(f"E-mail Gerado: {Cores.NEGRITO}{obj.email}{Cores.RESET}")
         
-        # PROCESSO CADASTRO
         try:
             log_info("Acessando Cadastro...")
             page.get("https://member.gnjoylatam.com/pt/join")
             
-            if checar_bloqueio_ip(page):
-                pass
+            if not garantir_carregamento(page, '#email', timeout=30):
+                log_erro("Timeout carregando formulário. Site lento ou fora do ar.")
+                contador_tentativas += 1; continue
 
-            if not page.wait.ele_displayed('#email', timeout=20):
-                log_aviso("Site demorou. Atualizando...")
-                page.refresh()
-                vencer_cloudflare(page)
-                garantir_logout(page)
-                if not page.wait.ele_displayed('#email', timeout=20):
-                    log_erro("Site não carregou.")
-                    continue 
-
-            vencer_cloudflare(page, checar_cookies=True)
+            if not vencer_cloudflare_obrigatorio(page):
+                log_erro("Cloudflare barrou. Reiniciando página...")
+                page.refresh(); continue
             
             page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj.email)
             delay_humano()
             
             if not clicar_com_seguranca(page, 'text=Enviar verificação', "Botão Enviar"):
-                continue 
+                contador_tentativas += 1; continue 
             
-            if page.ele('text:já está em uso') or page.ele('text:Registered'):
-                log_aviso("E-mail já cadastrado! Trocando...")
-                continue 
+            # dá um pequeno tempo pro React renderizar o erro
+            time.sleep(3)
 
-            print(f"   {Cores.CIANO}⏳ Aguardando e-mail (Cadastro) em {obj.provider_name}...{Cores.RESET}", end="", flush=True)
-            cod1 = None
-            start_wait = time.time()
-            while time.time() - start_wait < 50:
+            # 🔍 DEBUG: texto visível na página inteira
+            try:
+                body_txt = page.ele('tag:body').text or ""
+                # log_debug("BODY (primeiros 400 chars): " + body_txt[:400])
+            except:
+                pass
+
+            
+            tag_erro, texto_erro = capturar_erro_email(page)
+
+            if texto_erro:
+                # log_debug(f"ERRO NA TELA [{tag_erro}]: {texto_erro}")
+
+                if tag_erro in ("DOMINIO_BLOQUEADO", "EMAIL_INVALIDO"):
+                    dom = obj.email.split('@')[1].lower()
+                    log_aviso(f"Email/domínio rejeitado ({dom}). Blacklistando domínio na sessão.")
+                    dominios_banidos.add(dom)
+                    contador_tentativas += 1
+                    continue
+
+                if tag_erro == "SEGURANCA_INSUFICIENTE":
+                    log_aviso("Cloudflare falhou (Falso positivo). Recarregando...")
+                    page.refresh()
+                    continue
+
+                if tag_erro == "EMAIL_EM_USO":
+                    log_aviso("E-mail em uso.")
+                    contador_tentativas += 1
+                    continue
+
+
+            print(f"   {Cores.CIANO}⏳ Aguardando e-mail...{Cores.RESET}", end="", flush=True)
+            cod1 = None; start = time.time()
+            
+            while time.time() - start < 60:
                 print(".", end="", flush=True)
                 val = prov.esperar_codigo(obj, "Cadastro")
                 if val:
-                    cod_extraido = extrair_codigo_seguro(val)
-                    if cod_extraido: cod1 = cod_extraido; break
+                    cod1 = extrair_codigo_seguro(val)
+                    if cod1: break
                 time.sleep(4)
             
             if not cod1:
-                print(f"\n   {Cores.VERMELHO}❌ Timeout.{Cores.RESET}")
-                continue 
+                dom_timeout = obj.email.split('@')[1].lower()
+                log_aviso(f"Timeout Email. Domínio {dom_timeout} pode estar bloqueado para recebimento.")
+                dominios_banidos.add(dom_timeout)
+                contador_tentativas += 1; continue 
                 
-            print(f"\n   {Cores.VERDE}🔥 CÓDIGO RECEBIDO: {cod1}{Cores.RESET}")
+            print(f"\n   {Cores.VERDE}🔥 CÓDIGO: {cod1}{Cores.RESET}")
             page.ele('#authnumber').input(cod1)
             time.sleep(1)
             try: page.ele('text=Verificação concluída').click()
             except: pass
             
             senha = gerar_senha_ragnarok()
-            page.ele('#password').input(senha)
-            page.ele('#password2').input(senha)
-            try:
-                page.ele('.page_selectBtn__XfETd').click()
-                page.ele('text=Brasil').click()
+            page.ele('#password').input(senha); page.ele('#password2').input(senha)
+            try: page.ele('.page_selectBtn__XfETd').click(); page.ele('text=Brasil').click()
             except: pass
-            page.ele('#firstname').input(obj.primeiro_nome.capitalize())
-            page.ele('#lastname').input(CONF.get("sobrenome_padrao", "Silva"))
+            page.ele('#firstname').input("Jose"); page.ele('#lastname').input(CONF.get("sobrenome_padrao", "Silva"))
             page.ele('#birthday').input("01/01/1995")
             page.scroll.to_bottom()
-            try:
-                page.run_js("document.getElementById('terms1').click()")
-                page.run_js("document.getElementById('terms2').click()")
+            try: page.run_js("document.getElementById('terms1').click()"); page.run_js("document.getElementById('terms2').click()")
             except: pass
             
-            if not clicar_com_seguranca(page, '.page_submitBtn__hk_C0', "Botão CONTINUAR"):
-                 if not clicar_com_seguranca(page, 'text=CONTINUAR', "Botão CONTINUAR"): return False
-            
+            clicar_com_seguranca(page, '.page_submitBtn__hk_C0', "Botão CONTINUAR")
             log_sucesso("Cadastro enviado!")
             
-            # === LOGIN ===
-            log_info("Fazendo Login...")
-            if page.ele('text=Entrar'): clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar")
-            else: page.get("https://login.gnjoylatam.com")
+            # === LOGIN SUB-LOOP ===
+            login_sucesso = False
+            
+            for tentativa_login in range(3):
+                log_info(f"Tentativa de Login {tentativa_login+1}/3...")
+                diagnostico_pagina(page)
                 
-            page.wait.url_change('login', timeout=TIMEOUT_PADRAO)
-            vencer_cloudflare(page, False)
-            
-            page.ele('#email').click(); page.ele('#email').clear(); page.ele('#email').input(obj.email)
-            delay_humano()
-            page.ele('#password').input(senha)
-            delay_humano()
-            clicar_com_seguranca(page, 'text=CONTINUAR', "Login")
-            
-            page.wait.url_change('login.gnjoylatam.com', timeout=30)
-            
-            # --- OTP ---
+                if "login.gnjoylatam" not in page.url:
+                    page.get("https://login.gnjoylatam.com")
+                    if not garantir_carregamento(page, '#email', timeout=20):
+                        log_erro("Não carregou página de login. Tentando recarregar...")
+                        continue
+
+                vencer_cloudflare_obrigatorio(page)
+                page.ele('#email').input(obj.email)
+                page.ele('#password').input(senha)
+                time.sleep(1)
+                
+                # log_debug("Enviando ENTER no campo de senha...")
+                page.actions.key_down(Keys.ENTER).key_up(Keys.ENTER)
+                time.sleep(2)
+                
+                if "login.gnjoylatam" in page.url:
+                    # log_debug("ENTER não redirecionou. Tentando clique no botão...")
+                    clicar_com_seguranca(page, '.page_loginBtn__JUYeS', "Botão Login (Classe)")
+                
+                # log_debug("Aguardando redirecionamento pós-login...")
+                page.wait.url_change('login', timeout=20)
+                
+                page.get("https://www.gnjoylatam.com/pt")
+                time.sleep(2)
+                
+                if page.ele('text:Logout') or page.ele('.header_logoutBtn__6Pv_m'):
+                    log_sucesso("Sessão confirmada (Logout visível).")
+                    login_sucesso = True
+                    break 
+                elif page.ele('.header_rightlist__btn__5cynY') or page.ele('text:Login'):
+                    log_aviso("Login não persistiu. Tentando novamente...")
+                else:
+                    # log_debug("Estado incerto. Assumindo logado.")
+                    login_sucesso = True
+                    break
+
+            if not login_sucesso:
+                log_erro("Falha crítica no Login após 3 tentativas. Descartando conta.")
+                contador_tentativas += 1; continue
+
+
+            # === OTP ===
             page.get("https://www.gnjoylatam.com/pt")
-            
-            if not page.ele('.header_mypageBtn__cR1p3') and (page.ele('text=Login') or page.ele('text=Entrar')):
-                log_aviso("Sessão perdida. Tentando login de resgate...")
-                if clicar_com_seguranca(page, 'text=Login', "Botão Login") or clicar_com_seguranca(page, 'text=Entrar', "Botão Entrar"):
-                    page.wait.url_change('login', timeout=15)
-                    vencer_cloudflare(page, False)
-                    page.ele('#email').input(obj.email)
-                    page.ele('#password').input(senha)
-                    clicar_com_seguranca(page, 'text=CONTINUAR', "Login")
-                    time.sleep(5)
-                    page.get("https://www.gnjoylatam.com/pt")
+            time.sleep(2)
 
+            # abre o perfil (isso força o fluxo correto de sessão)
             if not clicar_com_seguranca(page, '.header_mypageBtn__cR1p3', "Perfil"):
-                log_erro("Falha crítica: Não logou após cadastro.")
-                continue 
+                log_erro("Perfil não apareceu. Sessão pode não ter persistido.")
+                contador_tentativas += 1
+                continue
 
-            if not clicar_com_seguranca(page, 'text=Conexão OTP', "Menu OTP"): continue
+            # entra no menu OTP pelo fluxo normal
+            if not clicar_com_seguranca(page, 'text=Conexão OTP', "Menu OTP"):
+                log_erro("Não achou o menu 'Conexão OTP'.")
+                contador_tentativas += 1
+                continue
+
+            # garante que está na URL certa
+            if "gotp" not in page.url:
+                page.get("https://member.gnjoylatam.com/pt/mypage/gotp")
+                time.sleep(2)
+
+            # agora sim, clica no botão
+            if not clicar_botao_otp(page):
+                log_erro("Não foi possível clicar no botão Solicitação de serviço OTP.")
+                consolidar_conta_no_principal(obj.email, senha, seed="SEM_OTP")
+                contador_tentativas += 1
+                continue
+
             
-            seletores = ['text:Solicitação de serviço OTP', '.page_otp_join_btn__KKBJq']
-            clicou = False
-            for sel in seletores:
-                if clicar_com_seguranca(page, sel, "Solicitar OTP"):
-                    clicou = True; break
+            print(f"   {Cores.CIANO}⏳ Aguardando e-mail OTP...{Cores.RESET}", end="", flush=True)
+            cod2 = None; start = time.time()
             
-            if not clicou: return False
-                
-            print(f"   {Cores.CIANO}⏳ Aguardando e-mail (OTP) em {obj.provider_name}...{Cores.RESET}", end="", flush=True)
-            cod2 = None
-            start_wait = time.time()
-            while time.time() - start_wait < 50:
+            # Espera o segundo e-mail
+            while time.time() - start < 60:
                 print(".", end="", flush=True)
-                val = prov.esperar_codigo(obj, "OTP")
+                val = prov.esperar_codigo(obj, "OTP") # Filtro pode ser 'OTP' ou 'autenticação'
+                if not val: val = prov.esperar_codigo(obj, "autenticação")
+                
                 if val:
-                    cod_extraido = extrair_codigo_seguro(val)
-                    if cod_extraido: cod2 = cod_extraido; break
+                    cod2 = extrair_codigo_seguro(val)
+                    if cod2: break
                 time.sleep(4)
 
-            if not cod2: return False
-            print(f"\n   {Cores.VERDE}🔥 CÓDIGO RECEBIDO: {cod2}{Cores.RESET}")
+            if not cod2: 
+                log_erro("Timeout esperando código OTP.")
+                consolidar_conta_no_principal(obj.email, senha, seed="FALHA_EMAIL_OTP")
+                contador_tentativas += 1; continue
             
-            page.wait.ele_displayed('#authnumber', timeout=TIMEOUT_PADRAO)
-            page.ele('#authnumber').input(cod2)
-            delay_humano()
+            print(f"\n   {Cores.VERDE}🔥 OTP: {cod2}{Cores.RESET}")
             
-            clicar_com_seguranca(page, 'text=Verificação concluída', "Validar OTP")
-            time.sleep(3)
+            # Preenche o OTP na modal
+            if page.ele('#authnumber'):
+                page.ele('#authnumber').input(cod2)
+                clicar_com_seguranca(page, 'text=Verificação concluída', "Validar OTP")
+                time.sleep(3)
             
-            # --- SEED ---
+            # Captura a SEED
             ele_seed = page.wait.ele_displayed('.page_otp_key__nk3eO', timeout=TIMEOUT_PADRAO)
             if ele_seed:
                 seed_text = ele_seed.text
@@ -576,133 +817,88 @@ def criar_conta(page):
                 
                 if TEM_PYOTP:
                     totp = pyotp.TOTP(seed_text.replace(" ", ""))
-                    codigo_app = totp.now()
+                    # Preenche o código do autenticador para confirmar
                     inputs = page.eles('tag:input')
                     for i in inputs:
                         if i.states.is_displayed and not i.attr('disabled') and i.attr('type') == 'text':
-                            i.input(codigo_app); break
-                    delay_humano()
+                            i.input(totp.now()); break
                     
                     if clicar_com_seguranca(page, 'text=Confirme', "Confirme"):
-                        achou_ok = False
-                        if clicar_com_seguranca(page, 'text=OK', "OK"): achou_ok = True
+                        clicar_com_seguranca(page, 'text=OK', "OK")
                         
-                        status = "PRONTA_PARA_FARMAR" if achou_ok else "VERIFICAR_MANUALMENTE"
+                        status = "PRONTA_PARA_FARMAR"
                         salvar_conta_backup(obj.email, senha, seed_text, status)
-                        consolidar_conta_no_principal(obj.email, senha)
-                        return True 
+                        consolidar_conta_no_principal(obj.email, senha, seed=seed_text)
+                        
+                        log_sucesso("CONTA FINALIZADA COM SUCESSO!")
+                        return True, prov_class
                 else:
+                    # Sem PyOTP, salva apenas a seed para configurar depois
                     salvar_conta_backup(obj.email, senha, seed_text, status="FALTA_ATIVAR_APP")
-                    return True
+                    consolidar_conta_no_principal(obj.email, senha, seed=seed_text)
+                    return True, prov_class
             else:
-                return False
+                log_erro("Não foi possível capturar a SEED.")
+                return False, ultimo_provedor_ok
 
         except Exception as e:
             log_erro(f"Erro no processo: {e}")
-            return False 
+            contador_tentativas += 1
             
-    return False
+    return False, ultimo_provedor_ok
 
-# --- TRAMPOLINE FUNCTION ---
 def verificar_licenca_online(tipo):
-    try:
-        from master import verificar_licenca_online as v
-        return v(tipo)
+    try: from master import verificar_licenca_online as v; return v(tipo)
     except: return True
 
-# --- MAIN ---
 def main():
-    if not verificar_licenca_online("fabricador"): 
-        return
+    blacklist_global = set()
+    ultimo_provedor_ok = None
 
-    os.system('cls' if os.name == 'nt' else 'clear')
-    exibir_banner()
-    
-    try: qtd = int(input(f"\n{Cores.AZUL}>> Quantas contas deseja criar? (Recomendado: 10): {Cores.RESET}").strip() or "1")
+    if not verificar_licenca_online("fabricador"): return
+    os.system('cls' if os.name == 'nt' else 'clear'); exibir_banner()
+    try: qtd = int(input(f"\n{Cores.AZUL}>> Quantas contas?: {Cores.RESET}").strip() or "1")
     except: qtd = 1
     
-    if qtd > 15:
-        log_aviso("Quantidade alta. Risco de bloqueio de IP.")
-        if input("Continuar? (s/n): ").lower() != 's': return
-
     print("\n>>> Inicializando Motor...")
-    co = ChromiumOptions()
-    co.set_argument('--start-maximized') 
-    co.set_argument('--window-size=1920,1080')
-    co.set_argument('--force-device-scale-factor=0.8')
-    
+    co = ChromiumOptions(); 
+    co.set_argument('--start-maximized')
     if CONF.get("headless", False): co.headless(True)
-    
     page = ChromiumPage(addr_or_opts=co)
-    try: page.set.window.max()
-    except: page.set.window.size(1920, 1080)
 
     sucessos = 0
     for i in range(qtd):
-        print(f"\n{Cores.NEGRITO}{Cores.AZUL}╔════════════════════════════════════════╗{Cores.RESET}")
-        print(f"{Cores.NEGRITO}{Cores.AZUL}║         CONTA {i+1} DE {qtd}                  ║{Cores.RESET}")
-        print(f"{Cores.NEGRITO}{Cores.AZUL}╚════════════════════════════════════════╝{Cores.RESET}")
-        
-        if criar_conta(page):
+        print(f"\n{Cores.NEGRITO}{Cores.AZUL}=== CONTA {i+1} DE {qtd} ==={Cores.RESET}")
+        ok, prov_ok = criar_conta(page, blacklist_global, ultimo_provedor_ok)
+        if ok:
             sucessos += 1
-            print(f"{Cores.VERDE}✅ Sucesso na conta {i+1}!{Cores.RESET}")
+            ultimo_provedor_ok = prov_ok or ultimo_provedor_ok
+            print(f"{Cores.VERDE}✅ Sucesso!{Cores.RESET}")
         else:
-            print(f"{Cores.VERMELHO}❌ Falha na conta {i+1} (Todas tentativas esgotadas).{Cores.RESET}")
-        
-        if i < qtd - 1:
-            tempo = random.randint(15, 25)
-            barra_progresso(tempo, prefixo='Resfriando', sufixo='s')
+            print(f"{Cores.VERMELHO}❌ Falha.{Cores.RESET}")
+        if i < qtd - 1: barra_progresso(random.randint(15, 25), prefixo='Resfriando', sufixo='s')
 
-    msg_final = f"Fabricação Finalizada. Sucessos: {sucessos}/{qtd}"
-    print(f"\n{Cores.NEGRITO}=== {msg_final} ==={Cores.RESET}")
-    enviar_telegram(msg_final)
-    
-    # --- INTEGRAÇÃO UX: FECHA O BROWSER DE CRIAÇÃO ---
-    page.quit() 
+    msg = f"Fim. Sucessos: {sucessos}/{qtd}"
+    print(f"\n{Cores.NEGRITO}=== {msg} ==={Cores.RESET}"); enviar_telegram(msg); page.quit() 
 
-    # --- PERGUNTA DE TRANSIÇÃO (PREMIUM UX) ---
     if sucessos > 0:
-        print(f"\n{Cores.CIANO}🚀  PRÓXIMO PASSO:{Cores.RESET}")
-        print(f"   Deseja rodar o {Cores.AMARELO}AUTO FARM{Cores.RESET} nessas contas agora?")
-        print(f"   {Cores.CINZA}(Recomendado: Troque o IP antes se criou mais de 5 contas){Cores.RESET}")
-        
-        resp = input(f"\n   >> Iniciar Farm? (S/N) [Enter=Não]: ").strip().lower()
-        
-        if resp == 's':
-            print(f"\n{Cores.VERDE}🔄 Migrando para o módulo de Farm...{Cores.RESET}")
-            time.sleep(2)
+        print(f"\n{Cores.CIANO}🚀 Iniciando Farm...{Cores.RESET}"); barra_progresso(15, prefixo='Carregando', sufixo='s')
+        try:
+            import checkin_bot_v2
             try:
-                # Importação tardia para garantir que o módulo existe e evitar ciclo
-                import checkin_bot_v2
-                
-                # Executa o unificador silenciosamente antes para garantir que as contas novas estejam no principal
-                from master import unificar_contas
-                # Precisaríamos adaptar o unificar_contas para rodar sem input, 
-                # mas por enquanto, o checkin_bot_v2 já lê o arquivo principal.
-                # Se as contas novas foram salvas no 'novas_contas.json', precisamos mover pro principal.
-                
-                # Lógica rápida de unificação antes de ir pro farm
-                try:
-                    with open(ARQUIVO_SALVAR, "r") as f: novas = json.load(f)
+                with open(ARQUIVO_SALVAR, "r") as f: novas = json.load(f)
+                if os.path.exists(ARQUIVO_PRINCIPAL):
                     with open(ARQUIVO_PRINCIPAL, "r") as f: principais = json.load(f)
-                    existentes = set(c['email'] for c in principais)
-                    for n in novas:
-                        if n['email'] not in existentes: principais.append(n)
-                    with open(ARQUIVO_PRINCIPAL, "w") as f: json.dump(principais, f, indent=4)
-                except: pass
+                else: principais = []
+                existentes = set(c['email'] for c in principais)
+                for n in novas:
+                    if n['email'] not in existentes: principais.append(n)
+                with open(ARQUIVO_PRINCIPAL, "w") as f: json.dump(principais, f, indent=4)
+            except: pass
+            checkin_bot_v2.executar()
+        except: pass
+    else: input("\nEnter...")
 
-                # Chama o Farm
-                checkin_bot_v2.executar()
-            except Exception as e:
-                print(f"{Cores.VERMELHO}Erro ao iniciar Farm: {e}{Cores.RESET}")
-                input()
-        else:
-            print("\nVoltando ao menu...")
-    else:
-        input("\nEnter para voltar...")
+def executar(): main()
 
-def executar():
-    main()
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
