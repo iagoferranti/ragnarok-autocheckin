@@ -31,6 +31,11 @@ ARQUIVO_CONTAS = "accounts.json"
 
 LOGS_SESSAO = []
 
+SESSION_ID = None
+LOG_FILE_PATH = None
+PREMIOS_FILE_PATH = None
+
+
 # --- CONFIG MANAGER ---
 def carregar_config():
     padrao = {"headless": False, "telegram_token": "", "telegram_chat_id": ""}
@@ -84,27 +89,76 @@ def get_base_path():
 def registrar_log(email, status, obs=""):
     agora = datetime.datetime.now().strftime("%H:%M:%S")
     linha = f"[{agora}] {email} -> {status} {f'({obs})' if obs else ''}"
-    
+
     cor_status = Cores.VERDE if status in ["SUCESSO", "JÁ FEITO"] else Cores.VERMELHO
     if status == "EXPIRADO": cor_status = Cores.AMARELO
-    
+
     icone = "✅" if status in ["SUCESSO", "JÁ FEITO"] else "❌"
     if status == "EXPIRADO": icone = "⚠️"
-    
+
     print(f"\n   {Cores.NEGRITO}STATUS:{Cores.RESET} {icone} {cor_status}{status}{Cores.RESET}")
     if obs: print(f"   {Cores.CINZA}OBS: {obs}{Cores.RESET}")
-    
-    LOGS_SESSAO.append(linha)
 
-def salvar_arquivo_log():
+    LOGS_SESSAO.append(linha)           # mantém em memória
+    append_log_operacional(linha)       # ✅ grava no arquivo A CADA CONTA
+
+
+def garantir_pastas_logs():
+    base_dir = get_base_path()
+    logs_dir = os.path.join(base_dir, "logs")
+    premios_dir = os.path.join(base_dir, "premios")
+    os.makedirs(logs_dir, exist_ok=True)
+    os.makedirs(premios_dir, exist_ok=True)
+    return logs_dir, premios_dir
+
+def iniciar_sessao_logs():
+    """Cria session_id e arquivos fixos pra execução inteira."""
+    global SESSION_ID, LOG_FILE_PATH, PREMIOS_FILE_PATH
+
+    logs_dir, premios_dir = garantir_pastas_logs()
+
+    if SESSION_ID is None:
+        SESSION_ID = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    LOG_FILE_PATH = os.path.join(logs_dir, f"log_execucao_{SESSION_ID}.txt")
+    PREMIOS_FILE_PATH = os.path.join(premios_dir, f"premios_{SESSION_ID}.txt")
+
+    # Header (só se arquivo não existir / vazio)
+    if not os.path.exists(LOG_FILE_PATH) or os.path.getsize(LOG_FILE_PATH) == 0:
+        with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(f"===== LOG EXECUCAO {SESSION_ID} =====\n")
+
+    if not os.path.exists(PREMIOS_FILE_PATH) or os.path.getsize(PREMIOS_FILE_PATH) == 0:
+        with open(PREMIOS_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(f"===== PREMIOS {SESSION_ID} =====\n")
+
+def append_log_operacional(linha: str):
+    """Append a cada conta (não perde log se travar)."""
     try:
-        base_dir = get_base_path()
-        logs_dir = os.path.join(base_dir, "logs")
-        if not os.path.exists(logs_dir): os.makedirs(logs_dir)
-        data_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        caminho = os.path.join(logs_dir, f"log_execucao_{data_str}.txt")
-        with open(caminho, "w", encoding="utf-8") as f: f.write("\n".join(LOGS_SESSAO))
-    except: pass
+        if not LOG_FILE_PATH:
+            iniciar_sessao_logs()
+        with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(linha.rstrip() + "\n")
+    except:
+        pass
+
+def append_log_premios(email: str, premios: list, giros_total: int):
+    """Append só quando houver prêmios."""
+    try:
+        if not premios:
+            return
+        if not PREMIOS_FILE_PATH:
+            iniciar_sessao_logs()
+
+        agora = datetime.datetime.now().strftime("%H:%M:%S")
+        premios_txt = " + ".join([p.strip() for p in premios if p and str(p).strip()])
+        linha = f"[{agora}] {email} | giros={giros_total} | {premios_txt}"
+
+        with open(PREMIOS_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(linha + "\n")
+    except:
+        pass
+
 
 # --- JSON HELPERS ---
 def carregar_json_seguro(caminho):
@@ -335,36 +389,54 @@ def descobrir_url_evento(page):
 
 # --- FLUXO 4: ROLETA ---
 def processar_roleta(page):
-    premio = None
+    premios = []
+    giros_total = 0
+
     try:
         page.scroll.to_bottom()
-        if not page.wait.ele_displayed('.styles_attempts_count__iHKXy', timeout=10): return None
-        try: qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
-        except: qtd = 0
-        
-        if qtd > 0: log_step("🎟️", f"Giros: {qtd}", Cores.AMARELO)
-        
+        if not page.wait.ele_displayed('.styles_attempts_count__iHKXy', timeout=10):
+            return [], 0
+
+        try:
+            qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
+        except:
+            qtd = 0
+
+        giros_total = qtd
+        if qtd > 0:
+            log_step("🎟️", f"Giros: {qtd}", Cores.AMARELO)
+
         while qtd > 0:
-            if not interagir_com_seguranca(page, '@alt=Start', "click"): break
+            if not interagir_com_seguranca(page, '@alt=Start', "click"):
+                break
             time.sleep(1)
-            
+
             alerta = page.handle_alert(accept=True)
             if alerta:
                 print(f"      {Cores.AMARELO}⚠️ Alerta: {alerta}{Cores.RESET}")
                 break
 
             if page.wait.ele_displayed('.styles_prize_object__LLDTh', timeout=20):
-                nm = page.ele('.styles_prize_object__LLDTh').text
-                print(f"      {Cores.MAGENTA}★ PRÊMIO: {Cores.NEGRITO}{nm}{Cores.RESET}")
-                premio = f"Prêmio: {nm}" if not premio else premio + f" + {nm}"
+                nm = (page.ele('.styles_prize_object__LLDTh').text or "").strip()
+                if nm:
+                    print(f"      {Cores.MAGENTA}★ PRÊMIO: {Cores.NEGRITO}{nm}{Cores.RESET}")
+                    premios.append(nm)
+
                 time.sleep(2)
                 interagir_com_seguranca(page, '.styles_roulette_btn_close__GzdeD', "click")
-            else: break
-            
-            try: qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
-            except: break
-    except: pass
-    return premio
+            else:
+                break
+
+            try:
+                qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
+            except:
+                break
+
+    except:
+        pass
+
+    return premios, giros_total
+
 
 # --- FLUXO PRINCIPAL DE CONTA ---
 def processar(page, conta, url, index, total):
@@ -465,8 +537,15 @@ def processar(page, conta, url, index, total):
                                         log_step("📅", "Check-in realizado!", Cores.VERDE)
                                         sucesso_conta = True
                             
-                            p = processar_roleta(page)
-                            if p: msg = p
+                            premios, giros_total = processar_roleta(page)
+
+                            # 1) msg operacional (opcional e enxuto)
+                            if premios:
+                                msg = f"ROULETA: {giros_total} giros | " + " + ".join(premios)
+
+                            # 2) log de prêmios separado (só escreve quando tiver prêmio)
+                            append_log_premios(email, premios, giros_total)
+
                             
                             log_step("👋", "Saindo da conta...", Cores.CINZA)
                             interagir_com_seguranca(page, 'text:Logout', "click")
@@ -516,6 +595,8 @@ def main():
     try: page.set.window.max()
     except: pass
 
+    iniciar_sessao_logs()
+
     url = descobrir_url_evento(page)
     ja_foi = carregar_historico_hoje()
     
@@ -535,7 +616,6 @@ def main():
         
     msg = f"FARM FINALIZADO - {count_sucesso} SUCESSOS"
     print(f"\n{Cores.VERDE}╔{'═'*(len(msg)+4)}╗\n║  {msg}  ║\n╚{'═'*(len(msg)+4)}╝{Cores.RESET}")
-    salvar_arquivo_log()
     # enviar_telegram(msg)
     page.quit()
     input("\nEnter para voltar...")
