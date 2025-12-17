@@ -5,14 +5,57 @@ import random
 import string
 import json
 import os
-import sys
 import html
+import sys
+from urllib.parse import quote
 from urllib.parse import quote
 from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
 os.system('') # Enables ANSI colors in CMD
+
+# --- PROXY UTILS ---
+def carregar_proxies_arquivo():
+    if not os.path.exists("proxies.txt"):
+        return []
+    with open("proxies.txt", "r") as f:
+        # Remove espaços e linhas vazias
+        proxies = [linha.strip() for linha in f if linha.strip()]
+    return proxies
+
+def formatar_proxy_requests(proxy_string):
+    """
+    Converte formatos de proxy para o padrão URL aceito pelo Requests/Browser.
+    Aceita:
+    1. ip:porta:user:senha (Padrão Webshare)
+    2. user:senha@ip:porta
+    3. ip:porta
+    """
+    if not proxy_string: return None
+    
+    proxy_string = proxy_string.strip()
+    
+    # Caso 1: Formato ip:porta:user:senha (4 partes separadas por :)
+    # Ex: 142.111.48.253:7030:ppjbocxs:yf2wchdd99hk
+    partes = proxy_string.split(':')
+    if len(partes) == 4:
+        ip, porta, user, senha = partes
+        # Remonta para: http://user:senha@ip:porta
+        proxy_final = f"http://{user}:{senha}@{ip}:{porta}"
+        return {
+            "http": proxy_final,
+            "https": proxy_final
+        }
+        
+    # Caso 2: Já está no formato URL ou é apenas ip:porta
+    if not proxy_string.startswith("http"):
+        proxy_string = f"http://{proxy_string}"
+        
+    return {
+        "http": proxy_string,
+        "https": proxy_string
+    }
 
 # --- DEFAULT CONFIGURATION ---
 ARQUIVO_CONFIG = "config.json"
@@ -432,87 +475,6 @@ class EmailSession:
         self.session_requests = None
 
 
-class ProviderDropmail:
-    def __init__(self):
-        # Endpoint GraphQL oficial do Dropmail
-        self.url = "https://dropmail.me/api/graphql/web-test-2025"
-
-    def gerar(self, banidos=[]):
-        # 1. Cria o objeto de sessão padrão
-        obj = EmailSession()
-        obj.provider_name = "Dropmail"
-        
-        query = """
-        mutation {
-            introduceSession {
-                id
-                addresses {
-                    address
-                }
-            }
-        }
-        """
-        try:
-            response = requests.post(self.url, json={'query': query}, timeout=10)
-            data = response.json()
-            
-            # Pega os dados do GraphQL
-            session_data = data.get('data', {}).get('introduceSession', {})
-            
-            if session_data:
-                # SALVA O ID DA SESSÃO NO OBJETO (IMPORTANTE PARA LER O EMAIL DEPOIS)
-                obj.sid_token = session_data['id'] 
-                obj.email = session_data['addresses'][0]['address']
-                
-                # Opcional: Checar se o domínio gerado está na lista de banidos
-                # O Dropmail não deixa escolher domínio, então se vier banido, retornamos None
-                domain = obj.email.split('@')[1]
-                if domain in banidos:
-                    return None
-                    
-                return obj
-                
-        except Exception as e:
-            # print(f"Erro Dropmail: {e}")
-            pass
-            
-        return None
-
-    def esperar_codigo(self, obj, filtro):
-        # Se não tivermos o ID da sessão salvo, não dá pra ler o email
-        if not obj.sid_token:
-            return None
-
-        query = """
-        query ($id: ID!) {
-            session(id: $id) {
-                mails {
-                    headerSubject
-                    text
-                }
-            }
-        }
-        """
-        variables = {'id': obj.sid_token}
-        
-        try:
-            response = requests.post(self.url, json={'query': query, 'variables': variables}, timeout=10)
-            data = response.json()
-            
-            emails = data.get('data', {}).get('session', {}).get('mails', [])
-            
-            for email in emails:
-                # Verifica se o assunto bate com o filtro (ex: "Cadastro" ou "OTP")
-                if filtro.lower() in email['headerSubject'].lower():
-                    # Retorna o corpo do email (Dropmail já entrega texto limpo geralmente)
-                    return email['text']
-                    
-        except Exception as e:
-            pass
-            
-        return None
-
-
 # --- CONFIGURAÇÃO DE HEADERS PARA API (Anti-Block) ---
 API_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -524,117 +486,20 @@ API_HEADERS = {
 }
 
 
-import requests
-import random
-import string
-import time
-from urllib.parse import quote
-
-class ProviderInboxes:
-    def __init__(self):
-        # ATUALIZADO PARA V3
-        self.base_url = "https://inboxes.com/api/v3"
-
-    def gerar(self, banidos=None):
-        if banidos is None:
-            banidos = []
-
-        obj = EmailSession()
-        obj.provider_name = "Inboxes"
-
-        try:
-            # CORREÇÃO 1: Endpoint plural (/domains)
-            r = requests.get(f"{self.base_url}/domains", timeout=10)
-            r.raise_for_status()
-            
-            # CORREÇÃO 2: A API V3 retorna uma LISTA direta, não um dict com chave "domains"
-            # Docs: [ {"qdn": "string"} ]
-            data_list = r.json() or []
-            
-            lista_limpa = []
-            for d in data_list:
-                if isinstance(d, dict) and d.get("qdn"):
-                    lista_limpa.append(d["qdn"])
-            
-            # Remove domínios banidos
-            doms = [d for d in lista_limpa if d not in set(banidos)]
-            
-            if not doms:
-                return None
-
-            domain = random.choice(doms)
-            nome = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
-            obj.email = f"{nome}@{domain}"
-            return obj
-
-        except Exception:
-            return None
-
-    def esperar_codigo(self, obj, filtro, timeout_s=60, intervalo_s=3):
-        if not obj or not getattr(obj, "email", None):
-            return None
-
-        deadline = time.time() + timeout_s
-        filtro_l = (filtro or "").lower()
-
-        while time.time() < deadline:
-            try:
-                # CORREÇÃO 3: Endpoint plural (/inboxes)
-                email_encoded = quote(obj.email, safe="")
-                url = f"{self.base_url}/inboxes/{email_encoded}"
-                
-                r = requests.get(url, timeout=10)
-                # Na V3, se a inbox não existir ainda, pode retornar 404 ou lista vazia. 
-                # Tratamos exceção para continuar tentando.
-                if r.status_code == 404:
-                    time.sleep(intervalo_s)
-                    continue
-                    
-                r.raise_for_status()
-                
-                # CORREÇÃO 4: A API V3 retorna uma LISTA direta de mensagens
-                # Docs: [ {"uid": "...", "subject": "..."} ]
-                msgs_list = r.json() or []
-                
-                # Se não for lista, evita erro
-                if not isinstance(msgs_list, list): msgs_list = []
-
-                for msg in msgs_list:
-                    assunto = (msg.get("subject") or "")
-                    
-                    if filtro_l and filtro_l in assunto.lower():
-                        uid = msg.get("uid")
-                        if not uid: continue
-
-                        # CORREÇÃO 5: Endpoint plural (/messages)
-                        r_msg = requests.get(f"{self.base_url}/messages/{uid}", timeout=10)
-                        r_msg.raise_for_status()
-                        data_msg = r_msg.json() or {}
-
-                        texto = data_msg.get("html") or data_msg.get("text") or ""
-                        
-                        # Se achou e tem conteúdo, retorna
-                        if texto:
-                            return texto
-                            
-            except Exception:
-                pass
-
-            time.sleep(intervalo_s)
-
-        return None
-
-
 # --- CLASSE DO PROVEDOR OTIMIZADA ---
 class ProviderMailTempSite:
+    # Agora aceita proxy_dict no __init__
+    def __init__(self, proxy_dict=None):
+        self.proxies = proxy_dict
+
     def gerar(self, banidos=[]):
         obj = EmailSession()
         obj.provider_name = "MailTempSite"
         tag = CONF.get("tag_email", "rag")
         
         try:
-            # Adicionado headers=API_HEADERS
-            r = requests.get("https://mail-temp.site/list_domain.php", headers=API_HEADERS, timeout=10)
+            # Passamos self.proxies aqui
+            r = requests.get("https://mail-temp.site/list_domain.php", headers=API_HEADERS, proxies=self.proxies, timeout=15)
             data = r.json()
             
             if data.get('success'):
@@ -646,44 +511,35 @@ class ProviderMailTempSite:
                 obj.email = f"{tag}_{sulfixo}@{domain}"
                 return obj
         except Exception as e:
-            # log_debug(f"Erro ao gerar email: {e}") 
+            # log_debug(f"Erro proxy/req: {e}")
             pass
         return None
 
     def esperar_codigo(self, obj, filtro):
         try:
-            # CheckMail com Headers
             url = f"https://mail-temp.site/checkmail.php?mail={obj.email}"
-            r = requests.get(url, headers=API_HEADERS, timeout=10)
+            # Passamos self.proxies aqui também
+            r = requests.get(url, headers=API_HEADERS, proxies=self.proxies, timeout=15)
             data = r.json()
             
             if data.get('success'):
                 for msg in data.get('emails', []):
-                    # Verifica assunto
                     if filtro.lower() in msg['subject'].lower():
-                        
-                        # ViewMail com Headers
-                        r2 = requests.get(f"https://mail-temp.site/viewmail.php?id={msg['id']}", headers=API_HEADERS, timeout=10)
+                        r2 = requests.get(f"https://mail-temp.site/viewmail.php?id={msg['id']}", headers=API_HEADERS, proxies=self.proxies, timeout=15)
                         data2 = r2.json()
-                        
                         if data2.get('success'):
                             raw_body = data2['email'].get('body', '')
-                            
-                            # TRUQUE DE MESTRE: Decodifica HTML entities (&amp; -> &)
-                            # Isso resolve 90% dos problemas de regex falhando
-                            body_decoded = html.unescape(raw_body)
-                            return body_decoded
-        except Exception as e:
-            # log_debug(f"Erro na API de email: {e}")
+                            return html.unescape(raw_body)
+        except Exception:
             pass
         return None
 
 # --- MAIN LOOP ---
-def criar_conta(page, blacklist_global, ultimo_provedor_ok=None):
+def criar_conta(page, blacklist_global, proxy_dict, ultimo_provedor_ok=None):
     garantir_logout(page)
     dominios_banidos = blacklist_global
     # provedores_disponiveis = [ProviderGuerrilla, ProviderMailTM, Provider1SecMail, ProviderMailTempSite]
-    provedores_disponiveis = [ProviderMailTempSite, ProviderDropmail, ProviderInboxes]
+    provedores_disponiveis = [ProviderMailTempSite]
 
     # prioriza o provedor "whitelist" (o primeiro que deu bom)
     if ultimo_provedor_ok in provedores_disponiveis:
@@ -702,7 +558,7 @@ def criar_conta(page, blacklist_global, ultimo_provedor_ok=None):
         prov_class = provedores_disponiveis[contador_tentativas % len(provedores_disponiveis)]
         log_info(f"Gerando identidade via: {Cores.MAGENTA}{prov_class.__name__}{Cores.RESET}...")
         
-        prov = prov_class()
+        prov = prov_class(proxy_dict=proxy_dict)
         obj = prov.gerar(banidos=list(dominios_banidos))
         
         if not obj:
@@ -947,50 +803,89 @@ def verificar_licenca_online(tipo):
     except: return True
 
 def main():
-    blacklist_global = set()
-    ultimo_provedor_ok = None
-
     if not verificar_licenca_online("fabricador"): return
     os.system('cls' if os.name == 'nt' else 'clear'); exibir_banner()
+    
+    # 1. CARREGA OS PROXIES
+    lista_proxies = carregar_proxies_arquivo()
+    usar_proxy = len(lista_proxies) > 0
+    
+    if usar_proxy:
+        print(f"{Cores.VERDE}🔌 Proxies carregados: {len(lista_proxies)}{Cores.RESET}")
+    else:
+        print(f"{Cores.AMARELO}⚠️  Nenhum proxy encontrado em proxies.txt. Usando IP real.{Cores.RESET}")
+
     try: qtd = int(input(f"\n{Cores.AZUL}>> Quantas contas?: {Cores.RESET}").strip() or "1")
     except: qtd = 1
     
     print("\n>>> Inicializando Motor...")
-    co = ChromiumOptions(); 
-    co.set_argument('--start-maximized')
-    if CONF.get("headless", False): co.headless(True)
-    page = ChromiumPage(addr_or_opts=co)
-
+    
+    # Variáveis de controle global
     sucessos = 0
+    ultimo_provedor_ok = None
+    blacklist_global = set()
 
+    # --- LOOP PRINCIPAL ---
     for i in range(qtd):
         print(f"\n{Cores.NEGRITO}{Cores.AZUL}=== CONTA {i+1} DE {qtd} ==={Cores.RESET}")
 
-        ok, prov_ok = criar_conta(page, blacklist_global, ultimo_provedor_ok)
+        proxy_string = None
+        proxy_requests = None
 
-        if ok:
-            sucessos += 1
+        # 2. CONFIGURA O PROXY DA VEZ
+        if usar_proxy:
+            # Pega o proxy baseado no número da conta (rotação)
+            proxy_string = lista_proxies[i % len(lista_proxies)]
+            # Formata para o Requests (dicionário)
+            proxy_requests = formatar_proxy_requests(proxy_string)
+            print(f"{Cores.CINZA}🛡️  Usando Proxy: {proxy_string}{Cores.RESET}")
 
-            # 🔥 fixa o primeiro provedor bom
-            if ultimo_provedor_ok is None:
-                ultimo_provedor_ok = prov_ok
+        # 3. CONFIGURA O NAVEGADOR (DENTRO DO LOOP)
+        # É obrigatório recriar o objeto ChromiumOptions a cada volta para mudar o IP
+        co = ChromiumOptions()
+        co.set_argument('--start-maximized')
+        
+        if proxy_string:
+            co.set_argument(f'--proxy-server={proxy_string}')
+            
+        if CONF.get("headless", False): co.headless(True)
+        
+        # Inicia o navegador com o IP novo
+        page = ChromiumPage(addr_or_opts=co)
 
-            print(f"{Cores.VERDE}✅ Sucesso!{Cores.RESET}")
-        else:
-            print(f"{Cores.VERMELHO}❌ Falha.{Cores.RESET}")
+        # 4. CHAMA A CRIAÇÃO DE CONTA PASSANDO O PROXY
+        try:
+            # Atenção: Atualize a definição de 'criar_conta' para aceitar 'proxy_requests'
+            ok, prov_ok = criar_conta(page, blacklist_global, proxy_requests, ultimo_provedor_ok)
 
+            if ok:
+                sucessos += 1
+                if ultimo_provedor_ok is None: ultimo_provedor_ok = prov_ok
+                print(f"{Cores.VERDE}✅ Sucesso!{Cores.RESET}")
+            else:
+                print(f"{Cores.VERMELHO}❌ Falha.{Cores.RESET}")
+
+        except Exception as e:
+            log_erro(f"Erro fatal no loop: {e}")
+
+        # 5. FECHA O NAVEGADOR PARA LIMPAR A SESSÃO E O PROXY
+        page.quit()
+
+        # Resfriamento entre contas (só se não for a última)
         if i < qtd - 1:
-            barra_progresso(random.randint(15, 25), prefixo='Resfriando', sufixo='s')
+            tempo = random.randint(15, 25)
+            barra_progresso(tempo, prefixo='Trocando IP', sufixo='s')
 
     msg = f"Fim. Sucessos: {sucessos}/{qtd}"
     print(f"\n{Cores.NEGRITO}=== {msg} ==={Cores.RESET}")
     enviar_telegram(msg)
-    page.quit()
-
+    
+    # ... (Bloco de iniciar o farm checkin_bot_v2 continua igual) ...
     if sucessos > 0:
         print(f"\n{Cores.CIANO}🚀 Iniciando Farm...{Cores.RESET}"); barra_progresso(15, prefixo='Carregando', sufixo='s')
         try:
             import checkin_bot_v2
+            # ... (Lógica de salvar no accounts.json mantida) ...
             try:
                 with open(ARQUIVO_SALVAR, "r") as f: novas = json.load(f)
                 if os.path.exists(ARQUIVO_PRINCIPAL):
@@ -1001,6 +896,7 @@ def main():
                     if n['email'] not in existentes: principais.append(n)
                 with open(ARQUIVO_PRINCIPAL, "w") as f: json.dump(principais, f, indent=4)
             except: pass
+            
             checkin_bot_v2.executar()
         except: pass
     else: input("\nEnter...")

@@ -167,116 +167,90 @@ def get_short_path(path):
     ctypes.windll.kernel32.GetShortPathNameW(path, buffer, 1024)
     return buffer.value
 
-# --- UPDATE SYSTEM ---
+# --- SISTEMA DE UPDATE MELHORADO (SEM .CMD) ---
 def verificar_atualizacao():
-    if not getattr(sys, 'frozen', False):
-        return
+    if not getattr(sys, 'frozen', False): return # Só roda se for .exe
 
-    print(f"{Cores.CINZA}🔄 Conectando ao servidor de atualizações...{Cores.RESET}")
+    print(f"{Cores.CINZA}🔄 Verificando atualizações...{Cores.RESET}")
     try:
-        r = requests.get(URL_VERSION_TXT, timeout=(5, 10))
-        r.raise_for_status()
+        r = requests.get(URL_VERSION_TXT, timeout=5)
         versao_nuvem = r.text.strip()
 
         if _is_newer_version(VERSAO_ATUAL, versao_nuvem):
-            print(f"\n{Cores.AMARELO}🚨 NOVA VERSÃO DISPONÍVEL: {versao_nuvem}{Cores.RESET}")
+            print(f"\n{Cores.AMARELO}🚨 NOVA VERSÃO: {versao_nuvem}{Cores.RESET}")
             if input("   >> Atualizar agora? (S/N): ").lower() == 's':
-                realizar_update()
+                realizar_update_simples()
         else:
+            # Limpeza silenciosa de arquivos .old antigos
+            limpar_arquivos_antigos()
             print(f"{Cores.VERDE}✅ Sistema atualizado.{Cores.RESET}")
             time.sleep(0.5)
+            
     except Exception as e:
-        print(f"{Cores.CINZA}⚠️ Falha ao verificar update ({e}){Cores.RESET}")
+        print(f"{Cores.CINZA}⚠️ Erro ao checar update: {e}{Cores.RESET}")
 
-def realizar_update():
+
+def limpar_arquivos_antigos():
+    """Remove o .exe.old se existir de um update anterior"""
+    try:
+        exe_atual = sys.executable
+        old_exe = exe_atual + ".old"
+        if os.path.exists(old_exe):
+            os.remove(old_exe)
+    except: pass
+
+def realizar_update_simples():
+    """Atualiza renomeando o arquivo em execução"""
     print(f"\n{Cores.CIANO}📥 Baixando atualização...{Cores.RESET}")
     try:
-        base_dir = get_base_path()
-        exe_atual = os.path.abspath(sys.executable)
-        nome_exe = os.path.basename(exe_atual)
+        exe_atual = sys.executable
+        dir_atual = os.path.dirname(exe_atual)
+        exe_old = exe_atual + ".old"
+        
+        # Nome temporário para o download
+        download_temp = os.path.join(dir_atual, "update_temp.tmp")
 
-        caminho_novo = os.path.join(base_dir, "update_temp.exe")
-
-        r = requests.get(URL_DOWNLOAD_EXE, stream=True, timeout=(5, 120))
+        # 1. Baixa o arquivo novo
+        r = requests.get(URL_DOWNLOAD_EXE, stream=True, timeout=120)
         r.raise_for_status()
-        with open(caminho_novo, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
+        
+        with open(download_temp, "wb") as f:
+            for chunk in r.iter_content(8192):
+                f.write(chunk)
 
-        if os.path.getsize(caminho_novo) < 200_000:
-            raise RuntimeError("Arquivo baixado muito pequeno (provável erro no download).")
+        # Validação básica
+        if os.path.getsize(download_temp) < 200_000:
+            raise Exception("Arquivo corrompido (muito pequeno).")
 
-        print(f"{Cores.VERDE}✅ Download concluído! Reiniciando...{Cores.RESET}")
+        print(f"{Cores.VERDE}✅ Download concluído! Aplicando...{Cores.RESET}")
+        
+        # 2. Renomeia o executável ATUAL para .old (Windows permite isso)
+        if os.path.exists(exe_old):
+            try: os.remove(exe_old)
+            except: pass # Se não der, tenta sobrescrever
+            
+        os.rename(exe_atual, exe_old)
+
+        # 3. Renomeia o arquivo baixado para o nome do executável original
+        os.rename(download_temp, exe_atual)
+
+        print(f"{Cores.VERDE}🚀 Reiniciando sistema...{Cores.RESET}")
         time.sleep(1)
 
-        backup = os.path.join(base_dir, f"{nome_exe}.old")
-
-        # cria updater fora do OneDrive
-        temp_dir = tempfile.gettempdir()
-        cmd_path = os.path.join(temp_dir, "rmt_updater.cmd")
-        log_path = os.path.join(temp_dir, "rmt_update.log")
-
-        cmd_script = textwrap.dedent(f"""
-            @echo off
-            chcp 65001 >NUL
-
-            echo ===== UPDATE START %DATE% %TIME% ===== > "{log_path}"
-            echo exe="{exe_atual}" >> "{log_path}"
-            echo new="{caminho_novo}" >> "{log_path}"
-            echo backup="{backup}" >> "{log_path}"
-
-            rem Backup
-            if exist "{exe_atual}" copy /Y "{exe_atual}" "{backup}" >> "{log_path}" 2>&1
-
-            rem espera app fechar
-            timeout /t 2 >NUL
-
-            rem tenta apagar e substituir
-            for /L %%i in (1,1,20) do (
-                del /F /Q "{exe_atual}" >> "{log_path}" 2>&1
-                if not exist "{exe_atual}" goto :DELOK
-                timeout /t 1 >NUL
-            )
-            echo FALHA: nao consegui apagar exe >> "{log_path}"
-            goto :ROLLBACK
-
-            :DELOK
-            ren "{caminho_novo}" "{nome_exe}" >> "{log_path}" 2>&1
-            if not exist "{exe_atual}" (
-                echo FALHA: ren nao criou exe >> "{log_path}"
-                goto :ROLLBACK
-            )
-
-            echo START exe novo >> "{log_path}"
-            start "" "{exe_atual}" >> "{log_path}" 2>&1
-            echo ===== UPDATE OK %DATE% %TIME% ===== >> "{log_path}"
-            del "%~f0" >> "{log_path}" 2>&1
-            exit
-
-            :ROLLBACK
-            echo ROLLBACK >> "{log_path}"
-            if exist "{backup}" (
-                copy /Y "{backup}" "{exe_atual}" >> "{log_path}" 2>&1
-                start "" "{exe_atual}" >> "{log_path}" 2>&1
-                echo ===== ROLLBACK OK %DATE% %TIME% ===== >> "{log_path}"
-            ) else (
-                echo ===== ROLLBACK FAIL ===== >> "{log_path}"
-            )
-            del "%~f0" >> "{log_path}" 2>&1
-            exit
-        """)
-
-        with open(cmd_path, "w", encoding="utf-8") as f:
-            f.write(cmd_script)
-
-        # chama via cmd de forma explícita
-        subprocess.Popen(["cmd.exe", "/c", cmd_path], cwd=temp_dir, shell=False)
-        sys.exit()
+        # 4. Inicia o novo processo
+        subprocess.Popen([exe_atual])
+        
+        # 5. Encerra o processo atual
+        sys.exit(0)
 
     except Exception as e:
-        print(f"{Cores.VERMELHO}Erro no update: {e}{Cores.RESET}")
-        input()
+        print(f"\n{Cores.VERMELHO}❌ Falha no update: {e}{Cores.RESET}")
+        # Tenta restaurar se der erro
+        try:
+            if os.path.exists(exe_old) and not os.path.exists(exe_atual):
+                os.rename(exe_old, exe_atual)
+        except: pass
+        input("Enter para continuar na versão antiga...")
 
 
 
