@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import html
+from urllib.parse import quote
 from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
@@ -156,24 +157,42 @@ def limpar_html(texto_html): return re.sub(re.compile('<.*?>'), ' ', texto_html)
 def extrair_codigo_seguro(texto_bruto):
     if not texto_bruto: return None
     
-    # 1. Remove tags HTML para limpar a sujeira visual
-    texto_limpo = limpar_html(texto_bruto)
+    # 1. Limpeza pesada
+    texto = limpar_html(texto_bruto).replace('&nbsp;', ' ')
     
-    # 2. Tenta o padrão explícito (Mais seguro: "Código de Verificação: 123456")
-    match_explicito = re.search(r'(?:C[oó]digo|Code).*?([A-Za-z0-9]{6})', texto_limpo, re.IGNORECASE | re.DOTALL)
-    if match_explicito:
-        codigo = match_explicito.group(1).strip()
-        # Filtra palavras comuns que podem ser confundidas com código pelo regex
-        if codigo.lower() not in ['abaixo', 'assets', 'height', 'width', 'style', 'script', 'border']:
+    # Lista de palavras comuns em e-mails que têm 6 letras e confundem o bot
+    BLACKLIST = [
+        'abaixo', 'assets', 'height', 'width', 'style', 'script', 'border', 
+        'verifi', 'cation', 'segura', 'access', 'bottom', 'center', 'family',
+        'follow', 'format', 'ground', 'header', 'online', 'public', 'select',
+        'server', 'sign', 'simple', 'source', 'strong', 'target', 'title',
+        'window', 'yellow', 'codigo', 'codigo'
+    ]
+
+    # --- ESTRATÉGIA 1: CÓDIGO MISTO (Letra + Número) ---
+    # É a mais segura. Se tiver número e letra misturado (ex: 12abc3), é 99.9% de certeza.
+    # Procura algo de 6 digitos que tenha PELO MENOS 1 número e PELO MENOS 1 letra.
+    match_misto = re.search(r'\b(?=[a-zA-Z0-9]*\d)(?=[a-zA-Z0-9]*[a-zA-Z])[a-zA-Z0-9]{6}\b', texto)
+    if match_misto:
+        return match_misto.group(0)
+
+    # --- ESTRATÉGIA 2: CONTEXTO "CÓDIGO:" (Para códigos só de letras ou só números) ---
+    # Procura "Código" ou "Code" e pega os próximos 6 caracteres, mas verifica a Blacklist.
+    match_contexto = re.search(r'(?:C[oó]digo|Code|OTP)[^a-zA-Z0-9]*([a-zA-Z0-9]{6})\b', texto, re.IGNORECASE)
+    if match_contexto:
+        codigo = match_contexto.group(1)
+        # Se for só letras, checa se não é uma palavra comum (ex: "abaixo")
+        if codigo.lower() not in BLACKLIST:
             return codigo
 
-    # 3. Fallback: Se o layout mudou, procura por qualquer sequência de 6 dígitos isolados
-    # Útil se o email vier apenas com o número ou em formato diferente
-    match_solto = re.search(r'\b(\d{6})\b', texto_limpo)
-    if match_solto:
-        return match_solto.group(1)
-        
+    # --- ESTRATÉGIA 3: NUMÉRICO PURO (Fallback) ---
+    # Se não achou misto nem contexto, tenta achar 6 números soltos (ex: 123456)
+    match_numerico = re.search(r'\b\d{6}\b', texto)
+    if match_numerico:
+        return match_numerico.group(0)
+
     return None
+
 
 def diagnostico_pagina(page):
     try:
@@ -505,59 +524,104 @@ API_HEADERS = {
 }
 
 
+import requests
+import random
+import string
+import time
+from urllib.parse import quote
+
 class ProviderInboxes:
     def __init__(self):
-        self.base_url = "https://inboxes.com/api/v2"
+        # ATUALIZADO PARA V3
+        self.base_url = "https://inboxes.com/api/v3"
 
-    def gerar(self, banidos=[]):
+    def gerar(self, banidos=None):
+        if banidos is None:
+            banidos = []
+
         obj = EmailSession()
         obj.provider_name = "Inboxes"
-        
-        try:
-            # 1. Pega lista de domínios
-            r = requests.get(f"{self.base_url}/domain", timeout=10)
-            data = r.json()
-            
-            # A API retorna algo como: { "domains": [...] }
-            if data and 'domains' in data:
-                # Filtra domínios banidos
-                doms = [d for d in data['domains'] if d not in banidos]
-                
-                if not doms: return None
-                
-                domain = random.choice(doms)
-                # Gera nome aleatório
-                nome = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-                
-                obj.email = f"{nome}@{domain}"
-                return obj
-        except Exception:
-            pass
-        return None
 
-    def esperar_codigo(self, obj, filtro):
         try:
-            # 2. Checa Inbox (Não precisa de sessão, só o email na URL)
-            url = f"{self.base_url}/inbox/{obj.email}"
-            r = requests.get(url, timeout=10)
-            data = r.json()
+            # CORREÇÃO 1: Endpoint plural (/domains)
+            r = requests.get(f"{self.base_url}/domains", timeout=10)
+            r.raise_for_status()
             
-            # Estrutura: { "msgs": [ { "uid": "...", "subject": "...", ... } ] }
-            if data and 'msgs' in data:
-                for msg in data['msgs']:
-                    if filtro.lower() in msg.get('subject', '').lower():
-                        
-                        # 3. Se achou, precisamos pegar o CONTEÚDO da mensagem (Outra requisição)
-                        uid = msg['uid']
-                        r_msg = requests.get(f"{self.base_url}/message/{uid}", timeout=10)
-                        data_msg = r_msg.json()
-                        
-                        # Tenta pegar html ou texto
-                        texto = data_msg.get('html') or data_msg.get('text') or ""
-                        return texto
-                        
+            # CORREÇÃO 2: A API V3 retorna uma LISTA direta, não um dict com chave "domains"
+            # Docs: [ {"qdn": "string"} ]
+            data_list = r.json() or []
+            
+            lista_limpa = []
+            for d in data_list:
+                if isinstance(d, dict) and d.get("qdn"):
+                    lista_limpa.append(d["qdn"])
+            
+            # Remove domínios banidos
+            doms = [d for d in lista_limpa if d not in set(banidos)]
+            
+            if not doms:
+                return None
+
+            domain = random.choice(doms)
+            nome = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
+            obj.email = f"{nome}@{domain}"
+            return obj
+
         except Exception:
-            pass
+            return None
+
+    def esperar_codigo(self, obj, filtro, timeout_s=60, intervalo_s=3):
+        if not obj or not getattr(obj, "email", None):
+            return None
+
+        deadline = time.time() + timeout_s
+        filtro_l = (filtro or "").lower()
+
+        while time.time() < deadline:
+            try:
+                # CORREÇÃO 3: Endpoint plural (/inboxes)
+                email_encoded = quote(obj.email, safe="")
+                url = f"{self.base_url}/inboxes/{email_encoded}"
+                
+                r = requests.get(url, timeout=10)
+                # Na V3, se a inbox não existir ainda, pode retornar 404 ou lista vazia. 
+                # Tratamos exceção para continuar tentando.
+                if r.status_code == 404:
+                    time.sleep(intervalo_s)
+                    continue
+                    
+                r.raise_for_status()
+                
+                # CORREÇÃO 4: A API V3 retorna uma LISTA direta de mensagens
+                # Docs: [ {"uid": "...", "subject": "..."} ]
+                msgs_list = r.json() or []
+                
+                # Se não for lista, evita erro
+                if not isinstance(msgs_list, list): msgs_list = []
+
+                for msg in msgs_list:
+                    assunto = (msg.get("subject") or "")
+                    
+                    if filtro_l and filtro_l in assunto.lower():
+                        uid = msg.get("uid")
+                        if not uid: continue
+
+                        # CORREÇÃO 5: Endpoint plural (/messages)
+                        r_msg = requests.get(f"{self.base_url}/messages/{uid}", timeout=10)
+                        r_msg.raise_for_status()
+                        data_msg = r_msg.json() or {}
+
+                        texto = data_msg.get("html") or data_msg.get("text") or ""
+                        
+                        # Se achou e tem conteúdo, retorna
+                        if texto:
+                            return texto
+                            
+            except Exception:
+                pass
+
+            time.sleep(intervalo_s)
+
         return None
 
 
