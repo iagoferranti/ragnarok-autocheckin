@@ -26,35 +26,34 @@ def carregar_proxies_arquivo():
 
 def formatar_proxy_requests(proxy_string):
     """
-    Converte formatos de proxy para o padrão URL aceito pelo Requests/Browser.
-    Aceita:
-    1. ip:porta:user:senha (Padrão Webshare)
-    2. user:senha@ip:porta
-    3. ip:porta
+    Converte 'IP:PORT:USER:PASS' para 'http://USER:PASS@IP:PORT'
     """
     if not proxy_string: return None
     
     proxy_string = proxy_string.strip()
     
-    # Caso 1: Formato ip:porta:user:senha (4 partes separadas por :)
-    # Ex: 142.111.48.253:7030:ppjbocxs:yf2wchdd99hk
+    # Se vier no formato do seu arquivo (4 partes com :)
+    # Ex: 216.10.27.159:6837:ppjbocxs:yf2wchdd99hk
     partes = proxy_string.split(':')
     if len(partes) == 4:
         ip, porta, user, senha = partes
-        # Remonta para: http://user:senha@ip:porta
-        proxy_final = f"http://{user}:{senha}@{ip}:{porta}"
+        # O Chrome precisa deste formato aqui:
+        proxy_url = f"http://{user}:{senha}@{ip}:{porta}"
+        
         return {
-            "http": proxy_final,
-            "https": proxy_final
+            "http": proxy_url,
+            "https": proxy_url,
+            "url_formatada": proxy_url # Guardamos a string pronta pro Chrome
         }
         
-    # Caso 2: Já está no formato URL ou é apenas ip:porta
+    # Fallback para outros formatos
     if not proxy_string.startswith("http"):
         proxy_string = f"http://{proxy_string}"
         
     return {
         "http": proxy_string,
-        "https": proxy_string
+        "https": proxy_string,
+        "url_formatada": proxy_string
     }
 
 # --- DEFAULT CONFIGURATION ---
@@ -834,19 +833,27 @@ def main():
 
         # 2. CONFIGURA O PROXY DA VEZ
         if usar_proxy:
-            # Pega o proxy baseado no número da conta (rotação)
-            proxy_string = lista_proxies[i % len(lista_proxies)]
-            # Formata para o Requests (dicionário)
-            proxy_requests = formatar_proxy_requests(proxy_string)
-            print(f"{Cores.CINZA}🛡️  Usando Proxy: {proxy_string}{Cores.RESET}")
-
-        # 3. CONFIGURA O NAVEGADOR (DENTRO DO LOOP)
-        # É obrigatório recriar o objeto ChromiumOptions a cada volta para mudar o IP
+            # Pega o proxy bruto do arquivo
+            proxy_string_bruta = lista_proxies[i % len(lista_proxies)]
+            
+            # Formata corretamente (Isso resolve o erro da tela preta!)
+            proxy_config = formatar_proxy_requests(proxy_string_bruta)
+            proxy_url = proxy_config['http'] # Pega a string 'http://user:pass@ip:port'
+            
+            # Passa o dicionário para a função de criar conta (Requests)
+            proxy_requests = proxy_config
+            
+            print(f"{Cores.CINZA}🛡️  Usando Proxy: {proxy_string_bruta}{Cores.RESET}")
+        
+        # 3. CONFIGURA O NAVEGADOR
         co = ChromiumOptions()
         co.set_argument('--start-maximized')
         
         if proxy_string:
-            co.set_argument(f'--proxy-server={proxy_string}')
+            # AQUI ESTÁ A CORREÇÃO CRÍTICA:
+            # Usamos proxy_url (formatado) e não proxy_string (bruto)
+            # O DrissionPage/Chrome precisa de http://user:pass@ip:port
+            co.set_argument(f'--proxy-server={proxy_url}')
             
         if CONF.get("headless", False): co.headless(True)
         
