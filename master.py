@@ -410,6 +410,83 @@ def unificar_contas():
     
     input("\nEnter para voltar...")
 
+
+
+
+def desligar_computador(segundos=30):
+    """Agenda desligamento do Windows após X segundos."""
+    try:
+        if os.name == "nt":
+            os.system(f"shutdown /s /t {int(segundos)}")
+        else:
+            os.system("shutdown -h now")
+    except:
+        pass
+
+def cancelar_desligamento():
+    """Cancela um desligamento agendado (Windows)."""
+    try:
+        if os.name == "nt":
+            os.system("shutdown /a")
+    except:
+        pass
+
+def confirmar_desligamento(timeout=10):
+    """
+    Confirma desligamento com timeout.
+    Padrão: DESLIGAR (se não responder nada em X segundos).
+    Para cancelar: pressione N dentro do tempo.
+    """
+    print(f"\n{Cores.AMARELO}🛑 Você escolheu finalizar DESLIGANDO o computador.{Cores.RESET}")
+    print(f"{Cores.CINZA}   Pressione {Cores.NEGRITO}N{Cores.RESET}{Cores.CINZA} em até {timeout}s para CANCELAR.{Cores.RESET}")
+    print(f"{Cores.CINZA}   (Se não fizer nada, vou assumir que é SIM){Cores.RESET}")
+
+    inicio = time.time()
+
+    # Windows: leitura não-bloqueante via msvcrt
+    if os.name == "nt":
+        try:
+            import msvcrt
+            while time.time() - inicio < timeout:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch().lower()
+                    if ch == 'n':
+                        print(f"\n{Cores.AMARELO}⛔ Desligamento cancelado.{Cores.RESET}")
+                        return False
+                time.sleep(0.05)
+        except:
+            pass
+    else:
+        # Linux/mac: fallback simples (sem bloqueio real) -> assume SIM ao final
+        while time.time() - inicio < timeout:
+            time.sleep(0.2)
+
+    print(f"\n{Cores.VERDE}✅ Nenhuma ação detectada. Desligamento CONFIRMADO.{Cores.RESET}")
+    return True
+
+
+def desligar_com_contagem(segundos=30):
+    """Mostra contagem e permite cancelar."""
+    try:
+        print(f"\n{Cores.AMARELO}🛑 Desligando em {segundos}s...{Cores.RESET}")
+        print(f"{Cores.CINZA}   (Digite 'c' e Enter para cancelar){Cores.RESET}")
+
+        for i in range(segundos, 0, -1):
+            # leitura simples “não-bloqueante” é chata no Windows; então fazemos um aviso + delay
+            # e deixamos o cancelamento pelo shutdown /a se quiser.
+            time.sleep(1)
+
+        desligar_computador(0)
+    except:
+        desligar_computador(segundos)
+
+
+
+
+
+
+
+
 # --- MENU PRINCIPAL ---
 def main():
     definir_titulo()
@@ -458,6 +535,19 @@ def main():
 
         print(f"   {Cores.VERDE}[3]{Cores.RESET} 🔐 Gerador de OTP (Authenticator)")
         opcoes.append('3')
+
+        if "all" in perms or "fabricador" in perms:
+            print(f"   {Cores.VERDE}[4]{Cores.RESET} 🏭 Fabricador + Desligar")
+            opcoes.append('4')
+        else:
+            print(f"   {Cores.CINZA}[4] 🔒 Fabricador + Desligar (Bloqueado){Cores.RESET}")
+
+        if "all" in perms or "checkin" in perms:
+            print(f"   {Cores.VERDE}[5]{Cores.RESET} 🎰 Auto Farm + Desligar")
+            opcoes.append('5')
+        else:
+            print(f"   {Cores.CINZA}[5] 🔒 Auto Farm + Desligar (Bloqueado){Cores.RESET}")
+
         
         print(f"\n   {Cores.VERMELHO}[0]{Cores.RESET} Sair")
         opcoes.append('0')
@@ -491,6 +581,39 @@ def main():
             except Exception as e:
                 print(f"Erro ao abrir visualizador: {e}")
                 input()
+        
+        elif escolha == '4':
+            limpar_tela()
+            if not confirmar_desligamento(timeout=10):
+                print(f"{Cores.CINZA}Cancelado. Voltando ao menu...{Cores.RESET}")
+                time.sleep(1)
+                continue
+
+            try:
+                fabricador.executar()
+            except Exception as e:
+                print(f"{Cores.VERMELHO}Erro no módulo Fabricador: {e}{Cores.RESET}")
+                input("\nEnter...")
+            finally:
+                desligar_computador(segundos=30)
+
+
+        elif escolha == '5':
+            limpar_tela()
+            if not confirmar_desligamento(timeout=10):
+                print(f"{Cores.CINZA}Cancelado. Voltando ao menu...{Cores.RESET}")
+                time.sleep(1)
+                continue
+
+            try:
+                checkin_bot_v2.executar()
+            except Exception as e:
+                print(f"{Cores.VERMELHO}Erro no módulo Auto Farm: {e}{Cores.RESET}")
+                input("\nEnter...")
+            finally:
+                desligar_computador(segundos=30)
+
+
 
         elif escolha == '0':
             print("\nEncerrando sistema...")

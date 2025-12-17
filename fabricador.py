@@ -6,6 +6,7 @@ import string
 import json
 import os
 import sys
+import html
 from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
@@ -151,13 +152,27 @@ def delay_humano(): time.sleep(random.uniform(0.8, 1.5))
 
 def limpar_html(texto_html): return re.sub(re.compile('<.*?>'), ' ', texto_html)
 
+# --- FUNÇÃO DE EXTRAÇÃO MELHORADA ---
 def extrair_codigo_seguro(texto_bruto):
     if not texto_bruto: return None
-    match = re.search(r'C[oó]digo de Verificaç[aã]o.*?([A-Za-z0-9]{6})', limpar_html(texto_bruto), re.IGNORECASE | re.DOTALL)
-    if match:
-        codigo = match.group(1).strip()
-        if codigo.lower() in ['abaixo', 'assets', 'height', 'width', 'style']: return None
-        return codigo
+    
+    # 1. Remove tags HTML para limpar a sujeira visual
+    texto_limpo = limpar_html(texto_bruto)
+    
+    # 2. Tenta o padrão explícito (Mais seguro: "Código de Verificação: 123456")
+    match_explicito = re.search(r'(?:C[oó]digo|Code).*?([A-Za-z0-9]{6})', texto_limpo, re.IGNORECASE | re.DOTALL)
+    if match_explicito:
+        codigo = match_explicito.group(1).strip()
+        # Filtra palavras comuns que podem ser confundidas com código pelo regex
+        if codigo.lower() not in ['abaixo', 'assets', 'height', 'width', 'style', 'script', 'border']:
+            return codigo
+
+    # 3. Fallback: Se o layout mudou, procura por qualquer sequência de 6 dígitos isolados
+    # Útil se o email vier apenas com o número ou em formato diferente
+    match_solto = re.search(r'\b(\d{6})\b', texto_limpo)
+    if match_solto:
+        return match_solto.group(1)
+        
     return None
 
 def diagnostico_pagina(page):
@@ -398,224 +413,213 @@ class EmailSession:
         self.session_requests = None
 
 
-GUERRILLA_DOMINIOS_BONS = [
-    "sharklasers.com",
-    "grr.la",
-    "guerrillamail.com",
-    "guerrillamail.net",
-    "guerrillamail.org",
-    "guerrillamail.info",
-    "guerrillamail.biz",
-    "guerrillamail.de",
-    # deixe guerrillamailblock.com por último, se quiser manter como fallback
-    "guerrillamailblock.com",
-]
+class ProviderDropmail:
+    def __init__(self):
+        # Endpoint GraphQL oficial do Dropmail
+        self.url = "https://dropmail.me/api/graphql/web-test-2025"
 
-def testar_guerrilla_funcional(session, tentativas=2, timeout=5):
-    """
-    Testa se a API do Guerrilla responde corretamente.
-    Não precisa receber email real, só validar resposta.
-    """
-    for _ in range(tentativas):
-        try:
-            r = session.get(
-                "https://api.guerrillamail.com/ajax.php?f=check_email&seq=0",
-                timeout=timeout
-            )
-            if r.status_code == 200 and isinstance(r.json(), dict):
-                return True
-        except:
-            time.sleep(1)
-    return False
-
-
-class ProviderGuerrilla:
     def gerar(self, banidos=[]):
+        # 1. Cria o objeto de sessão padrão
         obj = EmailSession()
-        obj.provider_name = "GuerrillaMail"
-        obj.session_requests = requests.Session()
-
-        tag = CONF.get("tag_email", "rag")
-
-        s = obj.session_requests
-
-        if not testar_guerrilla_funcional(s):
-            return None
-
-        # escolhe domínio “bom” (não banido) — se sobrar só block, ele entra como fallback
-        banidos = set([b.lower() for b in banidos])
-        dominios = [d for d in GUERRILLA_DOMINIOS_BONS if d.lower() not in banidos]
-        if not dominios:
-            return None
-
-        for i in range(6):
-            try:
-                # pega sid_token (quando existir)
-                r0 = s.get("https://api.guerrillamail.com/ajax.php?f=get_email_address", timeout=10)
-                j0 = r0.json() if r0.status_code == 200 else {}
-                obj.sid_token = j0.get("sid_token") or obj.sid_token
-
-                sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-                user_novo = f"{tag}_{sulfixo}"
-                dominio = random.choice(dominios)
-
-                # FORÇA domínio aqui
-                url = (
-                    "https://api.guerrillamail.com/ajax.php"
-                    f"?f=set_email_user&email_user={user_novo}&domain={dominio}&lang=en"
-                )
-                # se sid_token existir, inclui (ajuda muito na consistência)
-                if obj.sid_token:
-                    url += f"&sid_token={obj.sid_token}"
-
-                r_set = s.get(url, timeout=10)
-                j = r_set.json() if r_set.status_code == 200 else {}
-
-                email_final = j.get("email_addr") or ""
-                if not email_final:
-                    continue
-
-                dom = email_final.split("@", 1)[1].lower()
-
-                log_debug(f"Guerrilla gerou: {email_final} | sid_token={'OK' if obj.sid_token else 'NONE'}")
-
-
-                if dom in banidos:
-                    continue
-
-                obj.email = email_final
+        obj.provider_name = "Dropmail"
+        
+        query = """
+        mutation {
+            introduceSession {
+                id
+                addresses {
+                    address
+                }
+            }
+        }
+        """
+        try:
+            response = requests.post(self.url, json={'query': query}, timeout=10)
+            data = response.json()
+            
+            # Pega os dados do GraphQL
+            session_data = data.get('data', {}).get('introduceSession', {})
+            
+            if session_data:
+                # SALVA O ID DA SESSÃO NO OBJETO (IMPORTANTE PARA LER O EMAIL DEPOIS)
+                obj.sid_token = session_data['id'] 
+                obj.email = session_data['addresses'][0]['address']
+                
+                # Opcional: Checar se o domínio gerado está na lista de banidos
+                # O Dropmail não deixa escolher domínio, então se vier banido, retornamos None
+                domain = obj.email.split('@')[1]
+                if domain in banidos:
+                    return None
+                    
                 return obj
-
-            except:
-                time.sleep(1)
-
+                
+        except Exception as e:
+            # print(f"Erro Dropmail: {e}")
+            pass
+            
         return None
 
     def esperar_codigo(self, obj, filtro):
-        try:
-            url = "https://api.guerrillamail.com/ajax.php?f=check_email&seq=0"
-            if obj.sid_token:
-                url += f"&sid_token={obj.sid_token}"
+        # Se não tivermos o ID da sessão salvo, não dá pra ler o email
+        if not obj.sid_token:
+            return None
 
-            r = obj.session_requests.get(url, timeout=10)
-            if r.status_code == 200:
-                for msg in r.json().get('list', []):
-                    if filtro.lower() in msg.get('mail_subject', '').lower():
-                        mail_id = msg.get('mail_id')
-                        if not mail_id:
-                            continue
-                        url2 = f"https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id={mail_id}"
-                        if obj.sid_token:
-                            url2 += f"&sid_token={obj.sid_token}"
-                        r2 = obj.session_requests.get(url2, timeout=10)
-                        j2 = r2.json() if r2.status_code == 200 else {}
-                        return j2.get('mail_body', '')
-        except:
+        query = """
+        query ($id: ID!) {
+            session(id: $id) {
+                mails {
+                    headerSubject
+                    text
+                }
+            }
+        }
+        """
+        variables = {'id': obj.sid_token}
+        
+        try:
+            response = requests.post(self.url, json={'query': query, 'variables': variables}, timeout=10)
+            data = response.json()
+            
+            emails = data.get('data', {}).get('session', {}).get('mails', [])
+            
+            for email in emails:
+                # Verifica se o assunto bate com o filtro (ex: "Cadastro" ou "OTP")
+                if filtro.lower() in email['headerSubject'].lower():
+                    # Retorna o corpo do email (Dropmail já entrega texto limpo geralmente)
+                    return email['text']
+                    
+        except Exception as e:
+            pass
+            
+        return None
+
+
+# --- CONFIGURAÇÃO DE HEADERS PARA API (Anti-Block) ---
+API_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://mail-temp.site/",
+    "Origin": "https://mail-temp.site",
+    "X-Requested-With": "XMLHttpRequest"
+}
+
+
+class ProviderInboxes:
+    def __init__(self):
+        self.base_url = "https://inboxes.com/api/v2"
+
+    def gerar(self, banidos=[]):
+        obj = EmailSession()
+        obj.provider_name = "Inboxes"
+        
+        try:
+            # 1. Pega lista de domínios
+            r = requests.get(f"{self.base_url}/domain", timeout=10)
+            data = r.json()
+            
+            # A API retorna algo como: { "domains": [...] }
+            if data and 'domains' in data:
+                # Filtra domínios banidos
+                doms = [d for d in data['domains'] if d not in banidos]
+                
+                if not doms: return None
+                
+                domain = random.choice(doms)
+                # Gera nome aleatório
+                nome = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+                
+                obj.email = f"{nome}@{domain}"
+                return obj
+        except Exception:
             pass
         return None
 
-class ProviderMailTM:
-    def gerar(self, banidos=[]):
-        obj = EmailSession(); obj.provider_name = "Mail.tm"; tag = CONF.get("tag_email", "rag")
-        try:
-            r = requests.get("https://api.mail.tm/domains", timeout=5)
-            doms = r.json()['hydra:member']
-            disponiveis = [d['domain'] for d in doms if d['domain'] not in banidos]
-            if not disponiveis:
-                log_debug("MailTM: Todos os domínios estão banidos nesta sessão.")
-                return None
-            coms = [d for d in disponiveis if d.endswith(".com")]
-            domain = random.choice(coms) if coms else random.choice(disponiveis)
-            sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-            obj.email = f"{tag}_{sulfixo}@{domain}"
-            requests.post("https://api.mail.tm/accounts", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
-            r_tok = requests.post("https://api.mail.tm/token", json={"address": obj.email, "password": obj.senha_api}, timeout=5)
-            if r_tok.status_code == 200: obj.token = r_tok.json()['token']; return obj
-        except: pass
-        return None
-
-    def esperar_codigo(self, obj, filtro):
-        headers = {"Authorization": f"Bearer {obj.token}"}
-        try:
-            r = requests.get("https://api.mail.tm/messages", headers=headers, timeout=5)
-            if r.status_code == 200:
-                for msg in r.json()['hydra:member']:
-                    if filtro.lower() in msg['subject'].lower() and not msg['seen']:
-                        det = requests.get(f"https://api.mail.tm/messages/{msg['id']}", headers=headers)
-                        requests.patch(f"https://api.mail.tm/messages/{msg['id']}", headers=headers, json={"seen": True})
-                        return det.json()['text']
-        except: pass
-        return None
-
-class Provider1SecMail:
-    def gerar(self, banidos=[]):
-        obj = EmailSession(); obj.provider_name = "1secmail"; tag = CONF.get("tag_email", "rag")
-        try:
-            r = requests.get("https://www.1secmail.com/api/v1/?action=getDomainList", timeout=5)
-            if r.status_code == 200:
-                doms = r.json()
-                bons = [d for d in doms if d not in banidos]
-                if not bons: 
-                    log_debug("1SecMail: Todos domínios banidos.")
-                    return None
-                obj.domain_1sec = random.choice(bons)
-            else: 
-                if "esiix.com" not in banidos: obj.domain_1sec = "esiix.com"
-                else: return None
-            sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-            obj.login_1sec = f"{tag}_{sulfixo}"
-            obj.email = f"{obj.login_1sec}@{obj.domain_1sec}"
-            return obj
-        except: return None
-
     def esperar_codigo(self, obj, filtro):
         try:
-            url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={obj.login_1sec}&domain={obj.domain_1sec}"
-            r = requests.get(url, timeout=5)
-            if r.status_code == 200:
-                for msg in r.json():
-                    if filtro.lower() in msg['subject'].lower():
-                        r2 = requests.get(f"https://www.1secmail.com/api/v1/?action=readMessage&login={obj.login_1sec}&domain={obj.domain_1sec}&id={msg['id']}", timeout=5)
-                        return r2.json().get('textBody') or r2.json().get('body')
-        except: pass
+            # 2. Checa Inbox (Não precisa de sessão, só o email na URL)
+            url = f"{self.base_url}/inbox/{obj.email}"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            
+            # Estrutura: { "msgs": [ { "uid": "...", "subject": "...", ... } ] }
+            if data and 'msgs' in data:
+                for msg in data['msgs']:
+                    if filtro.lower() in msg.get('subject', '').lower():
+                        
+                        # 3. Se achou, precisamos pegar o CONTEÚDO da mensagem (Outra requisição)
+                        uid = msg['uid']
+                        r_msg = requests.get(f"{self.base_url}/message/{uid}", timeout=10)
+                        data_msg = r_msg.json()
+                        
+                        # Tenta pegar html ou texto
+                        texto = data_msg.get('html') or data_msg.get('text') or ""
+                        return texto
+                        
+        except Exception:
+            pass
         return None
 
+
+# --- CLASSE DO PROVEDOR OTIMIZADA ---
 class ProviderMailTempSite:
     def gerar(self, banidos=[]):
-        obj = EmailSession(); obj.provider_name = "MailTempSite"; tag = CONF.get("tag_email", "rag")
+        obj = EmailSession()
+        obj.provider_name = "MailTempSite"
+        tag = CONF.get("tag_email", "rag")
+        
         try:
-            r = requests.get("https://mail-temp.site/list_domain.php", timeout=5)
+            # Adicionado headers=API_HEADERS
+            r = requests.get("https://mail-temp.site/list_domain.php", headers=API_HEADERS, timeout=10)
             data = r.json()
+            
             if data.get('success'):
                 doms = [d for d in data.get('domains', []) if d not in banidos]
                 if not doms: return None
+                
                 domain = random.choice(doms)
                 sulfixo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
                 obj.email = f"{tag}_{sulfixo}@{domain}"
                 return obj
-        except: pass
+        except Exception as e:
+            # log_debug(f"Erro ao gerar email: {e}") 
+            pass
         return None
 
     def esperar_codigo(self, obj, filtro):
         try:
+            # CheckMail com Headers
             url = f"https://mail-temp.site/checkmail.php?mail={obj.email}"
-            r = requests.get(url, timeout=5)
+            r = requests.get(url, headers=API_HEADERS, timeout=10)
             data = r.json()
+            
             if data.get('success'):
                 for msg in data.get('emails', []):
+                    # Verifica assunto
                     if filtro.lower() in msg['subject'].lower():
-                        r2 = requests.get(f"https://mail-temp.site/viewmail.php?id={msg['id']}", timeout=5)
+                        
+                        # ViewMail com Headers
+                        r2 = requests.get(f"https://mail-temp.site/viewmail.php?id={msg['id']}", headers=API_HEADERS, timeout=10)
                         data2 = r2.json()
+                        
                         if data2.get('success'):
-                            return data2['email'].get('body', '')
-        except: pass
+                            raw_body = data2['email'].get('body', '')
+                            
+                            # TRUQUE DE MESTRE: Decodifica HTML entities (&amp; -> &)
+                            # Isso resolve 90% dos problemas de regex falhando
+                            body_decoded = html.unescape(raw_body)
+                            return body_decoded
+        except Exception as e:
+            # log_debug(f"Erro na API de email: {e}")
+            pass
         return None
 
 # --- MAIN LOOP ---
 def criar_conta(page, blacklist_global, ultimo_provedor_ok=None):
     garantir_logout(page)
     dominios_banidos = blacklist_global
-    provedores_disponiveis = [ProviderGuerrilla, ProviderMailTM, Provider1SecMail, ProviderMailTempSite]
+    # provedores_disponiveis = [ProviderGuerrilla, ProviderMailTM, Provider1SecMail, ProviderMailTempSite]
+    provedores_disponiveis = [ProviderMailTempSite, ProviderDropmail, ProviderInboxes]
 
     # prioriza o provedor "whitelist" (o primeiro que deu bom)
     if ultimo_provedor_ok in provedores_disponiveis:
