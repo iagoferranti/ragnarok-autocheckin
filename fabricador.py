@@ -6,6 +6,8 @@ import string
 import json
 import os
 import html
+import shutil
+import zipfile
 import sys
 from urllib.parse import quote
 from urllib.parse import quote
@@ -14,6 +16,61 @@ from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
 os.system('') # Enables ANSI colors in CMD
+
+def criar_extensao_proxy(proxy_user, proxy_pass, pasta_destino="."):
+    """
+    Cria uma extensão MINIMALISTA apenas para autenticação (User/Pass).
+    O IP e Porta serão definidos via argumento --proxy-server.
+    """
+    manifest_json = """
+    {
+        "version": "1.0.0",
+        "manifest_version": 2,
+        "name": "Chrome Proxy Auth",
+        "permissions": [
+            "proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking"
+        ],
+        "background": {
+            "scripts": ["background.js"]
+        },
+        "minimum_chrome_version": "22.0.0"
+    }
+    """
+
+    # Note que removemos a parte de "config = ..."
+    # Agora só tem o listener para digitar a senha
+    background_js = f"""
+    function callbackFn(details) {{
+        return {{
+            authCredentials: {{
+                username: "{proxy_user}",
+                password: "{proxy_pass}"
+            }}
+        }};
+    }}
+
+    chrome.webRequest.onAuthRequired.addListener(
+        callbackFn,
+        {{urls: ["<all_urls>"]}},
+        ['blocking']
+    );
+    """
+
+    # Nome aleatório para evitar conflito
+    import random
+    nome_pasta = f"auth_plugin_{random.randint(10000, 99999)}"
+    caminho_pasta = os.path.join(pasta_destino, nome_pasta)
+    
+    if not os.path.exists(caminho_pasta):
+        os.makedirs(caminho_pasta)
+
+    with open(os.path.join(caminho_pasta, "manifest.json"), "w", encoding="utf-8") as f:
+        f.write(manifest_json)
+        
+    with open(os.path.join(caminho_pasta, "background.js"), "w", encoding="utf-8") as f:
+        f.write(background_js)
+    
+    return os.path.abspath(caminho_pasta)
 
 # --- PROXY UTILS ---
 def carregar_proxies_arquivo():
@@ -78,6 +135,7 @@ class Cores:
 
 TENTATIVAS_BLOQUEIO_IP = 0
 MAX_BLOQUEIOS_IP = 3
+TEM_PROXIES_CARREGADOS = False
 
 
 # --- PREMIUM LOGGING FUNCTIONS ---
@@ -265,33 +323,50 @@ def clicar_com_seguranca(page, seletor, nome_elemento="Elemento"):
     log_erro(f"Falha ao clicar em {nome_elemento}."); return False
 
 def checar_bloqueio_ip(page):
-    global TENTATIVAS_BLOQUEIO_IP
+    global TENTATIVAS_BLOQUEIO_IP, TEM_PROXIES_CARREGADOS
 
     try:
-        body_txt = page.ele('tag:body').text.lower()
+        # Verifica sinais de bloqueio 429
+        # (Adicionei verificação de None para evitar erros se o body não carregar)
+        body_ele = page.ele('tag:body')
+        body_txt = body_ele.text.lower() if body_ele else ""
         title_txt = page.title.lower() if page.title else ""
 
         if "429" in title_txt or "too many requests" in body_txt:
-            TENTATIVAS_BLOQUEIO_IP += 1
+            
+            # === CENÁRIO 1: AUTOMÁTICO (TEM LISTA DE PROXY) ===
+            if TEM_PROXIES_CARREGADOS:
+                # Lança o erro específico. O Main vai pegar isso, fechar o browser
+                # e abrir o próximo proxy da lista imediatamente.
+                raise Exception("IP_BLOCKED_429")
 
-            print(
-                f"\n{Cores.VERMELHO}🚨 BLOQUEIO DE IP (429) "
-                f"[{TENTATIVAS_BLOQUEIO_IP}/{MAX_BLOQUEIOS_IP}]{Cores.RESET}"
-            )
+            # === CENÁRIO 2: MANUAL (SEM LISTA, IP RESIDENCIAL/VPN) ===
+            else:
+                TENTATIVAS_BLOQUEIO_IP += 1
+                print(f"\n{Cores.VERMELHO}🚨 BLOQUEIO DE IP (429) DETECTADO!{Cores.RESET}")
+                print(f"{Cores.AMARELO}   Como você não está usando lista de proxies, precisa trocar o IP manualmente.{Cores.RESET}")
+                
+                if TENTATIVAS_BLOQUEIO_IP >= MAX_BLOQUEIOS_IP:
+                    print(f"{Cores.VERMELHO}❌ Limite de tentativas manuais excedido.{Cores.RESET}")
+                    page.quit()
+                    os._exit(1)
 
-            if TENTATIVAS_BLOQUEIO_IP >= MAX_BLOQUEIOS_IP:
-                print(f"\n{Cores.VERMELHO}❌ IP BLOQUEADO DEFINITIVAMENTE NESTA EXECUÇÃO{Cores.RESET}")
-                print(f"{Cores.AMARELO}Finalize o script, troque o IP e execute novamente.{Cores.RESET}")
-                page.quit()
-                os._exit(1)  # encerra tudo imediatamente
-
-            input(f"\n{Cores.VERDE}>>> Troque o IP e pressione ENTER...{Cores.RESET}")
-            page.refresh()
-            time.sleep(5)
-            return True
+                # Trava a tela e espera o usuário dar Enter
+                input(f"\n{Cores.VERDE}>>> Troque o IP (VPN/Modem) e pressione ENTER para tentar de novo...{Cores.RESET}")
+                
+                try: page.refresh()
+                except: pass
+                
+                time.sleep(5)
+                return True
 
     except Exception as e:
-        log_debug(f"Erro checando bloqueio IP: {e}")
+        # Se for o nosso erro de troca automática, deixa subir para o Main pegar
+        if "IP_BLOCKED_429" in str(e):
+            raise e
+        # Outros erros de leitura de página ignoramos
+        # log_debug(f"Erro checando bloqueio IP: {e}")
+        pass
 
     return False
 
@@ -487,9 +562,26 @@ API_HEADERS = {
 
 # --- CLASSE DO PROVEDOR OTIMIZADA ---
 class ProviderMailTempSite:
-    # Agora aceita proxy_dict no __init__
     def __init__(self, proxy_dict=None):
         self.proxies = proxy_dict
+        # ADICIONEI AQUI OS DOMÍNIOS RUINS DO SEU LOG
+        self.BLACKLIST_FIXA = [
+            "mail-temp.site",
+            "onesecsmail.xyz",
+            "1secmail.asia",
+            "1secmail.online",
+            "destroismails.com",
+            "onetimesmail.store",
+            "1secmail.top",
+            "top2tlc.com",
+            "onetimesmail.site",
+            "dinlaan.uk",
+            "1secmail.store",
+            "top3tlc.com",
+            "onetimesmail.store",
+            "onetimesmail.fun",
+            "top2tlc.com"
+        ]
 
     def gerar(self, banidos=[]):
         obj = EmailSession()
@@ -497,12 +589,16 @@ class ProviderMailTempSite:
         tag = CONF.get("tag_email", "rag")
         
         try:
-            # Passamos self.proxies aqui
             r = requests.get("https://mail-temp.site/list_domain.php", headers=API_HEADERS, proxies=self.proxies, timeout=15)
             data = r.json()
             
             if data.get('success'):
-                doms = [d for d in data.get('domains', []) if d not in banidos]
+                # FILTRAGEM DUPLA: Banidos da sessão + Blacklist Fixa
+                doms = [
+                    d for d in data.get('domains', []) 
+                    if d not in banidos and d not in self.BLACKLIST_FIXA
+                ]
+                
                 if not doms: return None
                 
                 domain = random.choice(doms)
@@ -510,25 +606,35 @@ class ProviderMailTempSite:
                 obj.email = f"{tag}_{sulfixo}@{domain}"
                 return obj
         except Exception as e:
-            # log_debug(f"Erro proxy/req: {e}")
             pass
         return None
 
     def esperar_codigo(self, obj, filtro):
         try:
             url = f"https://mail-temp.site/checkmail.php?mail={obj.email}"
-            # Passamos self.proxies aqui também
             r = requests.get(url, headers=API_HEADERS, proxies=self.proxies, timeout=15)
             data = r.json()
             
             if data.get('success'):
-                for msg in data.get('emails', []):
+                emails = data.get('emails', [])
+                
+                # --- DEBUG PARA DESCOBRIR O QUE ESTÁ CHEGANDO ---
+                if emails:
+                    assuntos = [m['subject'] for m in emails]
+                    # Só imprime se tiver algo novo pra não poluir demais
+                    # print(f" [DEBUG: Chegou na caixa: {assuntos}] ", end="") 
+                # ------------------------------------------------
+                
+                for msg in emails:
+                    # Verifica se o filtro bate
                     if filtro.lower() in msg['subject'].lower():
+                        
                         r2 = requests.get(f"https://mail-temp.site/viewmail.php?id={msg['id']}", headers=API_HEADERS, proxies=self.proxies, timeout=15)
                         data2 = r2.json()
                         if data2.get('success'):
                             raw_body = data2['email'].get('body', '')
                             return html.unescape(raw_body)
+                            
         except Exception:
             pass
         return None
@@ -792,6 +898,12 @@ def criar_conta(page, blacklist_global, proxy_dict, ultimo_provedor_ok=None):
                 return False, ultimo_provedor_ok
 
         except Exception as e:
+            # === MODIFICAÇÃO NECESSÁRIA ===
+            # Se o erro for de IP, NÃO engula o erro. Jogue para cima!
+            if "IP_BLOCKED_429" in str(e):
+                raise e 
+            
+            # Se for outro erro qualquer (ex: falha ao clicar), continua tentando
             log_erro(f"Erro no processo: {e}")
             contador_tentativas += 1
             
@@ -804,84 +916,145 @@ def verificar_licenca_online(tipo):
 def main():
     if not verificar_licenca_online("fabricador"): return
     os.system('cls' if os.name == 'nt' else 'clear'); exibir_banner()
+
+    global TEM_PROXIES_CARREGADOS
     
-    # 1. CARREGA OS PROXIES
+    # 1. CARREGA PROXIES E EMBARALHA
     lista_proxies = carregar_proxies_arquivo()
-    usar_proxy = len(lista_proxies) > 0
-    
-    if usar_proxy:
-        print(f"{Cores.VERDE}🔌 Proxies carregados: {len(lista_proxies)}{Cores.RESET}")
+    if lista_proxies:
+        random.shuffle(lista_proxies)
+        TEM_PROXIES_CARREGADOS = True
+        print(f"{Cores.VERDE}🔌 Proxies carregados: {len(lista_proxies)} (Modo Automático Ativo){Cores.RESET}")
     else:
-        print(f"{Cores.AMARELO}⚠️  Nenhum proxy encontrado em proxies.txt. Usando IP real.{Cores.RESET}")
+        TEM_PROXIES_CARREGADOS = False
+        print(f"{Cores.AMARELO}⚠️  Nenhum proxy encontrado. (Modo Manual Ativo){Cores.RESET}")
 
     try: qtd = int(input(f"\n{Cores.AZUL}>> Quantas contas?: {Cores.RESET}").strip() or "1")
     except: qtd = 1
     
     print("\n>>> Inicializando Motor...")
     
-    # Variáveis de controle global
     sucessos = 0
     ultimo_provedor_ok = None
     blacklist_global = set()
 
-    # --- LOOP PRINCIPAL ---
+    # Contador global para ir rotacionando a lista a cada tentativa
+    contador_global_proxies = 0
+
+    # --- LOOP PRINCIPAL (CONTAS) ---
     for i in range(qtd):
         print(f"\n{Cores.NEGRITO}{Cores.AZUL}=== CONTA {i+1} DE {qtd} ==={Cores.RESET}")
 
-        proxy_string = None
-        proxy_requests = None
-
-        # 2. CONFIGURA O PROXY DA VEZ
-        if usar_proxy:
-            # Pega o proxy bruto do arquivo
-            proxy_string_bruta = lista_proxies[i % len(lista_proxies)]
-            
-            # Formata corretamente (Isso resolve o erro da tela preta!)
-            proxy_config = formatar_proxy_requests(proxy_string_bruta)
-            proxy_url = proxy_config['http'] # Pega a string 'http://user:pass@ip:port'
-            
-            # Passa o dicionário para a função de criar conta (Requests)
-            proxy_requests = proxy_config
-            
-            print(f"{Cores.CINZA}🛡️  Usando Proxy: {proxy_string_bruta}{Cores.RESET}")
+        tentativas_proxy = 0
         
-        # 3. CONFIGURA O NAVEGADOR
-        co = ChromiumOptions()
-        co.set_argument('--start-maximized')
-        
-        if proxy_string:
-            # AQUI ESTÁ A CORREÇÃO CRÍTICA:
-            # Usamos proxy_url (formatado) e não proxy_string (bruto)
-            # O DrissionPage/Chrome precisa de http://user:pass@ip:port
-            co.set_argument(f'--proxy-server={proxy_url}')
+        # Loop infinito para insistir na MESMA conta se o IP for bloqueado
+        while True:
+            # Trava de segurança para não ficar num loop infinito eterno
+            if tentativas_proxy > 10:
+                print(f"{Cores.VERMELHO}Muitos proxies falharam nesta conta. Pulando...{Cores.RESET}")
+                break
+
+            # ==============================================================================
+            # 1. PREPARAÇÃO
+            # ==============================================================================
+            proxy_requests = None
+            proxy_url_chrome = None
             
-        if CONF.get("headless", False): co.headless(True)
-        
-        # Inicia o navegador com o IP novo
-        page = ChromiumPage(addr_or_opts=co)
+            if TEM_PROXIES_CARREGADOS and lista_proxies:
+                proxy_bruto = lista_proxies[contador_global_proxies % len(lista_proxies)]
+                contador_global_proxies += 1
+                
+                dados_proxy = formatar_proxy_requests(proxy_bruto)
+                proxy_requests = dados_proxy 
+                proxy_url_chrome = dados_proxy['url_formatada'] 
+                
+                print(f"{Cores.CINZA}🛡️  Usando Proxy: {proxy_url_chrome} (Tentativa {tentativas_proxy+1}){Cores.RESET}")
 
-        # 4. CHAMA A CRIAÇÃO DE CONTA PASSANDO O PROXY
-        try:
-            # Atenção: Atualize a definição de 'criar_conta' para aceitar 'proxy_requests'
-            ok, prov_ok = criar_conta(page, blacklist_global, proxy_requests, ultimo_provedor_ok)
+            # ==============================================================================
+            # 2. ABRE O NAVEGADOR (MÉTODO BLINDADO / HÍBRIDO)
+            # ==============================================================================
+            co = ChromiumOptions()
+            co.set_argument('--start-maximized')
+            
+            plugin_path = None
 
-            if ok:
-                sucessos += 1
-                if ultimo_provedor_ok is None: ultimo_provedor_ok = prov_ok
-                print(f"{Cores.VERDE}✅ Sucesso!{Cores.RESET}")
-            else:
-                print(f"{Cores.VERMELHO}❌ Falha.{Cores.RESET}")
+            if proxy_requests: 
+                import urllib.parse
+                try:
+                    # Desmonta a URL para pegar as partes
+                    parsed = urllib.parse.urlparse(proxy_requests['http'])
+                    p_host = parsed.hostname
+                    p_port = parsed.port
+                    p_user = parsed.username
+                    p_pass = parsed.password
+                    
+                    # 1. FORÇA O PROXY VIA COMANDO (Isso evita vazamento de IP)
+                    co.set_argument(f"--proxy-server={p_host}:{p_port}")
+                    
+                    # 2. CRIA EXTENSÃO SÓ PARA A SENHA
+                    plugin_path = criar_extensao_proxy(p_user, p_pass)
+                    co.add_extension(plugin_path)
+                    
+                    print(f"{Cores.CINZA}🛡️  Proxy Blindado Ativo: {p_host}:{p_port}{Cores.RESET}")
 
-        except Exception as e:
-            log_erro(f"Erro fatal no loop: {e}")
+                except Exception as e:
+                    print(f"{Cores.VERMELHO}Erro crítico no proxy: {e}{Cores.RESET}")
+                    # Se falhar a montagem, tenta sem nada (vai usar IP real, mas avisa)
+                    pass
 
-        # 5. FECHA O NAVEGADOR PARA LIMPAR A SESSÃO E O PROXY
-        page.quit()
+            if CONF.get("headless", False): co.headless(True)
+            
+            # Inicia o navegador
+            page = ChromiumPage(addr_or_opts=co)
 
-        # Resfriamento entre contas (só se não for a última)
+            # ==============================================================================
+            # 3. TENTA CRIAR A CONTA
+            # ==============================================================================
+            try:
+                # Executa a criação (apenas UMA vez)
+                ok, prov_ok = criar_conta(page, blacklist_global, proxy_requests, ultimo_provedor_ok)
+                
+                # Fecha o navegador
+                page.quit() 
+                
+                # Faxina da extensão
+                if plugin_path and os.path.exists(plugin_path):
+                    try: shutil.rmtree(plugin_path)
+                    except: pass
+
+                if ok:
+                    sucessos += 1
+                    if ultimo_provedor_ok is None: ultimo_provedor_ok = prov_ok
+                    print(f"{Cores.VERDE}✅ Sucesso!{Cores.RESET}")
+                else:
+                    print(f"{Cores.VERMELHO}❌ Falha na criação.{Cores.RESET}")
+
+                # Sai do while True e vai para a próxima conta
+                break 
+
+            except Exception as e:
+                # ==============================================================================
+                # 4. TRATAMENTO DE ERRO (IP BLOCK)
+                # ==============================================================================
+                try: page.quit()
+                except: pass
+                
+                if plugin_path and os.path.exists(plugin_path):
+                    try: shutil.rmtree(plugin_path)
+                    except: pass
+
+                if "IP_BLOCKED_429" in str(e):
+                    print(f"\n{Cores.VERMELHO}♻️  IP 429 Detectado! Trocando para o próximo proxy...{Cores.RESET}")
+                    tentativas_proxy += 1
+                    time.sleep(2)
+                    continue 
+                else:
+                    log_erro(f"Erro fatal: {e}")
+                    break
+
         if i < qtd - 1:
             tempo = random.randint(15, 25)
-            barra_progresso(tempo, prefixo='Trocando IP', sufixo='s')
+            barra_progresso(tempo, prefixo='Resfriando', sufixo='s')
 
     msg = f"Fim. Sucessos: {sucessos}/{qtd}"
     print(f"\n{Cores.NEGRITO}=== {msg} ==={Cores.RESET}")
