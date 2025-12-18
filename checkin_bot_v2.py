@@ -7,8 +7,36 @@ import datetime
 import requests
 import textwrap
 import ctypes
+from premios_manager import carregar_watchlist, normalizar_url
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
+
+
+# ==============================================================================
+# 📊 MEDIDOR DE CONSUMO DE DADOS
+# ==============================================================================
+ACUMULADO_MB = 0
+
+def medir_consumo(page, etapa=""):
+    """Soma o peso da página atual ao contador global."""
+    global ACUMULADO_MB
+    try:
+        # Script JS que soma o tamanho de HTML + Imagens + CSS + Scripts baixados
+        js_script = """
+        var total = 0;
+        performance.getEntries().forEach(entry => {
+            if (entry.transferSize) { total += entry.transferSize; }
+        });
+        return total;
+        """
+        bytes_pagina = page.run_js(js_script)
+        mb_pagina = bytes_pagina / (1024 * 1024)
+        
+        ACUMULADO_MB += mb_pagina
+        print(f"{Cores.MAGENTA}📊 [Gasto Dados] {etapa}: +{mb_pagina:.3f} MB | Total Sessão: {ACUMULADO_MB:.3f} MB{Cores.RESET}")
+    except:
+        pass
+# ==============================================================================
 
 os.system('') # Cores CMD
 
@@ -106,31 +134,62 @@ def registrar_log(email, status, obs=""):
 def garantir_pastas_logs():
     base_dir = get_base_path()
     logs_dir = os.path.join(base_dir, "logs")
+
     premios_dir = os.path.join(base_dir, "premios")
+    premios_bruto_dir = os.path.join(premios_dir, "bruto")
+    premios_filtrado_dir = os.path.join(premios_dir, "filtrado")
+
     os.makedirs(logs_dir, exist_ok=True)
-    os.makedirs(premios_dir, exist_ok=True)
-    return logs_dir, premios_dir
+    os.makedirs(premios_bruto_dir, exist_ok=True)
+    os.makedirs(premios_filtrado_dir, exist_ok=True)
+
+    return logs_dir, premios_bruto_dir, premios_filtrado_dir
+
+
+
+
+def parse_escolha_indices(s: str, max_n: int):
+    # aceita: "1, 3,6,10" / "1 3 6 10" / "1;3;6;10"
+    if not s:
+        return []
+    s = s.replace(";", ",").replace(" ", ",")
+    partes = [p.strip() for p in s.split(",") if p.strip()]
+    out = []
+    for p in partes:
+        if not p.isdigit():
+            continue
+        i = int(p)
+        if 1 <= i <= max_n:
+            out.append(i)
+    # remove duplicados mantendo ordem
+    seen = set()
+    out2 = []
+    for i in out:
+        if i not in seen:
+            out2.append(i); seen.add(i)
+    return out2
+
+
+PREMIOS_BRUTO_FILE_PATH = None
+PREMIOS_FILTRADO_FILE_PATH = None
 
 def iniciar_sessao_logs():
-    """Cria session_id e arquivos fixos pra execução inteira."""
-    global SESSION_ID, LOG_FILE_PATH, PREMIOS_FILE_PATH
+    global SESSION_ID, LOG_FILE_PATH, PREMIOS_BRUTO_FILE_PATH, PREMIOS_FILTRADO_FILE_PATH
 
-    logs_dir, premios_dir = garantir_pastas_logs()
+    logs_dir, premios_bruto_dir, premios_filtrado_dir = garantir_pastas_logs()
 
     if SESSION_ID is None:
         SESSION_ID = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     LOG_FILE_PATH = os.path.join(logs_dir, f"log_execucao_{SESSION_ID}.txt")
-    PREMIOS_FILE_PATH = os.path.join(premios_dir, f"premios_{SESSION_ID}.txt")
 
-    # Header (só se arquivo não existir / vazio)
+    PREMIOS_BRUTO_FILE_PATH = os.path.join(premios_bruto_dir, f"premios_{SESSION_ID}.txt")
+    PREMIOS_FILTRADO_FILE_PATH = os.path.join(premios_filtrado_dir, f"premios_filtrados.txt")
+
+    # Header log operacional
     if not os.path.exists(LOG_FILE_PATH) or os.path.getsize(LOG_FILE_PATH) == 0:
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(f"===== LOG EXECUCAO {SESSION_ID} =====\n")
-
-    if not os.path.exists(PREMIOS_FILE_PATH) or os.path.getsize(PREMIOS_FILE_PATH) == 0:
-        with open(PREMIOS_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(f"===== PREMIOS {SESSION_ID} =====\n")
 
 def append_log_operacional(linha: str):
     """Append a cada conta (não perde log se travar)."""
@@ -142,22 +201,53 @@ def append_log_operacional(linha: str):
     except:
         pass
 
-def append_log_premios(email: str, premios: list, giros_total: int):
-    """Append só quando houver prêmios."""
+def append_log_premios_bruto(email: str, premios: list, giros_total: int):
     try:
         if not premios:
             return
-        if not PREMIOS_FILE_PATH:
+        if not PREMIOS_BRUTO_FILE_PATH:
             iniciar_sessao_logs()
+
+        # header 1x
+        if not os.path.exists(PREMIOS_BRUTO_FILE_PATH) or os.path.getsize(PREMIOS_BRUTO_FILE_PATH) == 0:
+            with open(PREMIOS_BRUTO_FILE_PATH, "a", encoding="utf-8") as f:
+                f.write(f"===== PREMIOS BRUTO {SESSION_ID} =====\n")
 
         agora = datetime.datetime.now().strftime("%H:%M:%S")
         premios_txt = " + ".join([p.strip() for p in premios if p and str(p).strip()])
         linha = f"[{agora}] {email} | giros={giros_total} | {premios_txt}"
 
-        with open(PREMIOS_FILE_PATH, "a", encoding="utf-8") as f:
+        with open(PREMIOS_BRUTO_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(linha + "\n")
     except:
         pass
+
+
+def append_log_premios_filtrado(email: str, premios_filtrados: list, giros_total: int):
+    """
+    Arquivo ÚNICO (append-only): premios/filtrado/premios_filtrados.txt
+    """
+    try:
+        if not premios_filtrados:
+            return
+        if not PREMIOS_FILTRADO_FILE_PATH:
+            iniciar_sessao_logs()
+
+        # header 1x
+        if not os.path.exists(PREMIOS_FILTRADO_FILE_PATH) or os.path.getsize(PREMIOS_FILTRADO_FILE_PATH) == 0:
+            with open(PREMIOS_FILTRADO_FILE_PATH, "a", encoding="utf-8") as f:
+                f.write("===== PREMIOS FILTRADOS (APPEND-ONLY) =====\n")
+
+        agora = datetime.datetime.now().strftime("%H:%M:%S")
+        premios_txt = " + ".join([p.strip() for p in premios_filtrados if p and str(p).strip()])
+        linha = f"[{agora}] {email} | giros={giros_total} | {premios_txt}"
+
+        with open(PREMIOS_FILTRADO_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(linha + "\n")
+    except:
+        pass
+
+
 
 
 # --- JSON HELPERS ---
@@ -387,6 +477,7 @@ def descobrir_url_evento(page):
     
     return url_encontrada
 
+
 # --- FLUXO 4: ROLETA ---
 def processar_roleta(page):
     premios = []
@@ -512,18 +603,18 @@ def processar(page, conta, url, index, total):
                             # CHECK-IN
                             page.scroll.to_bottom()
                             btn_check = page.ele('tag:img@@alt=attendance button')
-                            if not btn_check: btn_check = page.ele('text:FAZER CHECK-IN')
-                            
+                            if not btn_check: 
+                                btn_check = page.ele('text:FAZER CHECK-IN')
+
                             if btn_check:
                                 if "complete" in str(btn_check.attr("src")):
                                     log_st = "JÁ FEITO"
                                     log_step("📅", "Check-in já feito hoje", Cores.AMARELO)
                                     sucesso_conta = True
                                 else:
-                                    # log_debug("Clicando Check-in...")
                                     btn_check.click()
                                     time.sleep(1)
-                                    
+
                                     alerta = page.handle_alert(accept=True)
                                     if alerta:
                                         log_step("⚠️", f"Aviso: {alerta}", Cores.AMARELO)
@@ -536,15 +627,30 @@ def processar(page, conta, url, index, total):
                                         log_st = "SUCESSO"
                                         log_step("📅", "Check-in realizado!", Cores.VERDE)
                                         sucesso_conta = True
-                            
+
+                            # ✅ ROLETA (sempre tenta rodar, mesmo se já tinha feito check-in)
                             premios, giros_total = processar_roleta(page)
 
-                            # 1) msg operacional (opcional e enxuto)
-                            if premios:
-                                msg = f"ROULETA: {giros_total} giros | " + " + ".join(premios)
+                            # ✅ LOG BRUTO (só grava se tiver prêmio)
+                            append_log_premios_bruto(email, premios, giros_total)
 
-                            # 2) log de prêmios separado (só escreve quando tiver prêmio)
-                            append_log_premios(email, premios, giros_total)
+                            # ✅ LOG FILTRADO (só grava se tiver match com watchlist do mesmo evento)
+                            wl = carregar_watchlist()
+                            url_norm = normalizar_url(url)
+                            wl_url = normalizar_url((wl or {}).get("event_url", ""))
+
+                            premios_filtrados = []
+                            if wl and wl_url and wl_url == url_norm:
+                                alvo = set((wl.get("selected") or []))
+                                premios_filtrados = [p for p in premios if p in alvo]
+
+                            append_log_premios_filtrado(email, premios_filtrados, giros_total)
+
+                            # msg operacional (consistente)
+                            if premios_filtrados:
+                                msg = f"ROULETA: {giros_total} giros | " + " + ".join(premios_filtrados)
+
+
 
                             
                             log_step("👋", "Saindo da conta...", Cores.CINZA)
@@ -616,6 +722,9 @@ def main():
         
     msg = f"FARM FINALIZADO - {count_sucesso} SUCESSOS"
     print(f"\n{Cores.VERDE}╔{'═'*(len(msg)+4)}╗\n║  {msg}  ║\n╚{'═'*(len(msg)+4)}╝{Cores.RESET}")
+
+    medir_consumo(page, "Fluxo Check-in Completo")
+
     # enviar_telegram(msg)
     page.quit()
     input("\nEnter para voltar...")

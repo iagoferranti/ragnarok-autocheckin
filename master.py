@@ -9,6 +9,7 @@ import ctypes
 import shutil
 import re
 import tempfile
+import premios_manager
 
 from datetime import datetime
 
@@ -521,8 +522,14 @@ def main():
             opcoes.append('5')
         else:
             print(f"   {Cores.CINZA}[5] 🔒 Auto Farm + Desligar (Bloqueado){Cores.RESET}")
-
         
+        if "all" in perms or "checkin" in perms:
+            print(f"   {Cores.VERDE}[6]{Cores.RESET} 🎁 Configurar Prêmios do Log")
+            opcoes.append('6')
+
+        print(f"   {Cores.VERDE}[7]{Cores.RESET} 📌 Gerar lista de contas-alvo (logs antigos)")
+        opcoes.append('7')
+
         print(f"\n   {Cores.VERMELHO}[0]{Cores.RESET} Sair")
         opcoes.append('0')
 
@@ -586,6 +593,24 @@ def main():
                 input("\nEnter...")
             finally:
                 desligar_computador(segundos=30)
+
+        elif escolha == '6':
+            limpar_tela()
+            try:
+                premios_manager.configurar_watchlist_manual()
+            except Exception as e:
+                print(f"Erro ao configurar prêmios: {e}")
+                input("\nEnter...")
+
+
+        elif escolha == '7':
+            limpar_tela()
+            try:
+                premios_manager.gerar_lista_contas_alvo_por_logs()
+            except Exception as e:
+                print(f"Erro: {e}")
+                input("\nEnter...")
+
 
 
 
