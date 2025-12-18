@@ -529,7 +529,7 @@ def main():
             print(f"   {Cores.VERDE}[6]{Cores.RESET} 🎁 Configurar Prêmios do Log")
             opcoes.append('6')
 
-        print(f"   {Cores.VERDE}[7]{Cores.RESET} 📌 Gerar lista de contas-alvo (logs antigos)")
+        print(f"   {Cores.VERDE}[7]{Cores.RESET} 📌 Sync inicial: filtrar logs antigos por Watchlist")
         opcoes.append('7')
 
         print(f"\n   {Cores.VERMELHO}[0]{Cores.RESET} Sair")
@@ -608,10 +608,12 @@ def main():
         elif escolha == '7':
             limpar_tela()
             try:
-                premios_manager.gerar_lista_contas_alvo_por_logs()
+                premios_manager.sync_filtrado_inicial_por_watchlist()
             except Exception as e:
                 print(f"Erro: {e}")
                 input("\nEnter...")
+
+
 
 
 
