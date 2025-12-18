@@ -3,11 +3,13 @@ import json
 import time
 import unicodedata
 import re
-from datetime import datetime
 
 WATCHLIST_FILE = "premios_watchlist.json"
 
 
+# =========================================================
+# Base path (compatível com EXE PyInstaller)
+# =========================================================
 def get_base_path():
     import sys
     if getattr(sys, "frozen", False):
@@ -19,6 +21,21 @@ def _watchlist_path():
     return os.path.join(get_base_path(), WATCHLIST_FILE)
 
 
+def _premios_dir():
+    return os.path.join(get_base_path(), "premios")
+
+
+def _premios_filtrado_dir():
+    return os.path.join(_premios_dir(), "filtrado")
+
+
+def _premios_filtrado_file():
+    return os.path.join(_premios_filtrado_dir(), "premios_filtrados.txt")
+
+
+# =========================================================
+# Normalização de prêmio (case-insensitive + sem acento)
+# =========================================================
 def normalizar_premio(txt: str) -> str:
     if not txt:
         return ""
@@ -29,6 +46,9 @@ def normalizar_premio(txt: str) -> str:
     return txt
 
 
+# =========================================================
+# Watchlist
+# =========================================================
 def carregar_watchlist():
     p = _watchlist_path()
     if not os.path.exists(p):
@@ -41,201 +61,129 @@ def carregar_watchlist():
         return None
 
 
-def _premios_root_dir():
-    return os.path.join(get_base_path(), "premios")
+def salvar_watchlist(wl: dict):
+    with open(_watchlist_path(), "w", encoding="utf-8") as f:
+        json.dump(wl, f, ensure_ascii=False, indent=2)
 
 
-def _filtrado_dir():
-    d = os.path.join(_premios_root_dir(), "filtrado")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def _filtrado_output_path():
-    return os.path.join(_filtrado_dir(), "premios_filtrados.txt")
-
-
-def _iterar_txts_recursivo(pasta: str):
-    for root, _, files in os.walk(pasta):
-        for fn in files:
-            if fn.lower().endswith(".txt"):
-                yield os.path.join(root, fn)
-
-
-def _parse_premios_da_linha(linha: str):
+def configurar_watchlist_manual():
     """
-    Extrai a parte de prêmios, assumindo padrão:
-      [..] email | giros=X | premio1 + premio2 + ...
-    Retorna lista de prêmios (strings) ou [] se não bater.
+    Menu 6 (100% manual): usuário cola os NOMES que quer monitorar.
     """
-    try:
-        m = re.search(r"\|\s*giros\s*=\s*\d+\s*\|\s*(.+)$", linha.strip())
-        if not m:
-            return []
-        premios_txt = m.group(1).strip()
-        if not premios_txt:
-            return []
-        return [p.strip() for p in premios_txt.split("+") if p.strip()]
-    except:
-        return []
-    
+    print("\n🎁 CONFIGURAR PRÊMIOS PARA O LOG (100% MANUAL)\n")
+    print("📋 Cole os NOMES DOS PRÊMIOS exatamente como aparecem no site")
+    print("👉 Um prêmio por linha")
+    print("👉 ENTER em branco finaliza\n")
 
-def gerar_lista_contas_alvo_por_logs():
-    """
-    OPÇÃO 7
-    Lê todos os logs antigos de prêmios e gera UM arquivo filtrado
-    com base na watchlist atual.
-    Executar apenas uma vez para sincronização.
-    """
+    itens = []
+    while True:
+        ln = input("> ").strip()
+        if not ln:
+            break
+        itens.append(ln)
 
-    base_dir = get_base_path()
-
-    premios_dir = os.path.join(base_dir, "premios")
-    filtrado_dir = os.path.join(premios_dir, "filtrado")
-    os.makedirs(filtrado_dir, exist_ok=True)
-
-    output_path = os.path.join(filtrado_dir, "premios_filtrados.txt")
-
-    wl = carregar_watchlist()
-    if not wl or not wl.get("selected"):
-        print("⚠️ Watchlist vazia. Configure os prêmios primeiro.")
+    if not itens:
+        print("❌ Nenhum prêmio informado.")
         input("\nEnter...")
         return
 
-    alvo_norm = set(normalizar_premio(x) for x in wl["selected"])
+    # remove duplicados mantendo ordem (e também guarda versão normalizada)
+    vistos = set()
+    itens_unicos = []
+    for x in itens:
+        if x not in vistos:
+            itens_unicos.append(x)
+            vistos.add(x)
 
-    # evita duplicar linhas
-    linhas_existentes = set()
-    if os.path.exists(output_path):
-        with open(output_path, "r", encoding="utf-8") as f:
-            for ln in f:
-                linhas_existentes.add(ln.strip())
+    wl_nova = {
+        "selected": itens_unicos,
+        "selected_norm": [normalizar_premio(x) for x in itens_unicos],
+        "updated_at_epoch": int(time.time()),
+    }
 
-    total_lidas = 0
-    total_gravadas = 0
+    salvar_watchlist(wl_nova)
 
-    for fname in os.listdir(premios_dir):
-        if not fname.lower().endswith(".txt"):
-            continue
-
-        path = os.path.join(premios_dir, fname)
-        if not os.path.isfile(path):
-            continue
-
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            for ln in f:
-                ln = ln.strip()
-                if not ln.startswith("["):
-                    continue
-
-                total_lidas += 1
-
-                # pega texto depois do último |
-                try:
-                    premio_txt = ln.split("|")[-1].strip()
-                except:
-                    continue
-
-                if normalizar_premio(premio_txt) in alvo_norm:
-                    if ln not in linhas_existentes:
-                        with open(output_path, "a", encoding="utf-8") as out:
-                            out.write(ln + "\n")
-                        linhas_existentes.add(ln)
-                        total_gravadas += 1
-
-    print("\n✅ SINCRONIZAÇÃO FINALIZADA")
-    print(f"📄 Linhas analisadas: {total_lidas}")
-    print(f"🎯 Linhas adicionadas ao filtrado: {total_gravadas}")
-    print(f"📂 Arquivo final: {output_path}")
+    print("\n✅ Watchlist salva com sucesso!")
+    print("🎯 Prêmios monitorados:")
+    for p in itens_unicos:
+        print("  -", p)
 
     input("\nEnter para voltar ao menu...")
 
 
-
-def sync_filtrado_inicial_por_watchlist():
+# =========================================================
+# Opção 7 (SYNC INICIAL): ler todos .txt antigos e gerar 1 filtrado
+# =========================================================
+def gerar_lista_contas_alvo_por_logs():
     """
-    OPÇÃO 7:
-    - Lê TODOS os .txt dentro de /premios (recursivo)
-    - Filtra linhas que contenham qualquer prêmio da watchlist
-    - Gera UM arquivo único: /premios/filtrado/premios_filtrados.txt
-    - Recria do zero (sync inicial)
+    Lê TODOS os .txt dentro de /premios (raiz + subpastas),
+    e gera /premios/filtrado/premios_filtrados.txt contendo apenas
+    as linhas cujo prêmio bate na watchlist.
     """
     wl = carregar_watchlist() or {}
-    selected = wl.get("selected") or []
-    alvo_norm = set(wl.get("selected_norm") or [normalizar_premio(x) for x in selected])
+    alvo_norm = set(wl.get("selected_norm") or [normalizar_premio(x) for x in (wl.get("selected") or [])])
 
     if not alvo_norm:
-        print("⚠️ Sua watchlist está vazia. Use o menu 6 antes.")
-        input("\nEnter...")
-        return
+        raise Exception("Watchlist vazia. Configure no Menu 6 antes.")
 
-    premios_dir = _premios_root_dir()
-    if not os.path.exists(premios_dir):
-        print("⚠️ Pasta /premios não existe ainda.")
-        input("\nEnter...")
-        return
+    base = _premios_dir()
+    if not os.path.exists(base):
+        raise Exception(f"Pasta de prêmios não encontrada: {base}")
 
-    # pega todos txt dentro de /premios
-    arquivos = list(_iterar_txts_recursivo(premios_dir))
+    # garante pasta de saída
+    os.makedirs(_premios_filtrado_dir(), exist_ok=True)
+    out_path = _premios_filtrado_file()
 
-    # IMPORTANTÍSSIMO: evita ler o próprio filtrado antigo, se existir
-    out_path = _filtrado_output_path()
-    arquivos = [a for a in arquivos if os.path.abspath(a) != os.path.abspath(out_path)]
+    # coleta TODOS .txt em /premios (inclui raiz, bruto, filtrado etc.)
+    txts = []
+    for root, _, files in os.walk(base):
+        for fn in files:
+            if fn.lower().endswith(".txt"):
+                full = os.path.join(root, fn)
+                # evita ler o próprio arquivo final (se já existir)
+                if os.path.abspath(full) == os.path.abspath(out_path):
+                    continue
+                txts.append(full)
 
-    if not arquivos:
-        print("⚠️ Não achei nenhum .txt dentro da pasta /premios.")
-        input("\nEnter...")
-        return
+    if not txts:
+        raise Exception(f"Não encontrei .txt em: {base}")
 
     linhas_match = []
-    vistos = set()  # remove duplicados exatos
+    total_lidas = 0
 
-    for arq in arquivos:
+    # regra simples: uma linha “válida” costuma ter: "] email | giros=" e " | "
+    # seu log real tem esse formato (ex.: “10X PASSAPORTE”, “2X BÊNÇÃO DO FERREIRO”). :contentReference[oaicite:0]{index=0}
+    for path in sorted(txts):
         try:
-            with open(arq, "r", encoding="utf-8", errors="ignore") as f:
-                for ln in f:
-                    lns = ln.strip()
-                    if not lns:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s:
                         continue
-                    # pula headers tipo ===== PREMIOS ...
-                    if lns.startswith("====="):
+                    if s.startswith("====="):
                         continue
+                    total_lidas += 1
 
-                    premios = _parse_premios_da_linha(lns)
-                    if not premios:
+                    # tenta extrair “parte do prêmio” depois do último " | "
+                    # exemplo: "[00:13:25] email | giros=1 | 2X BÊNÇÃO DO FERREIRO" :contentReference[oaicite:1]{index=1}
+                    if " | " not in s:
                         continue
-
-                    # se qualquer prêmio da linha bater na watchlist -> mantém a LINHA INTEIRA
-                    ok = False
-                    for p in premios:
-                        if normalizar_premio(p) in alvo_norm:
-                            ok = True
-                            break
-
-                    if ok:
-                        key = lns
-                        if key not in vistos:
-                            vistos.add(key)
-                            linhas_match.append(lns)
+                    premio = s.split(" | ")[-1].strip()
+                    if normalizar_premio(premio) in alvo_norm:
+                        linhas_match.append(s)
         except:
-            pass
+            continue
 
-    if not linhas_match:
-        print("ℹ️ Nenhuma linha antiga bateu com a watchlist (ainda).")
-        input("\nEnter...")
-        return
-
-    # escreve do zero (sync inicial)
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # grava (sobrescreve) o SYNC inicial
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("===== PREMIOS FILTRADOS (SYNC INICIAL) =====\n")
-        f.write(f"Gerado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Total de linhas: {len(linhas_match)}\n")
-        f.write("\n")
-        for ln in linhas_match:
-            f.write(ln + "\n")
+        f.write(f"gerado_em_epoch={int(time.time())}\n")
+        f.write(f"watchlist_itens={len(alvo_norm)}\n")
+        f.write(f"arquivos_lidos={len(txts)}\n")
+        f.write(f"linhas_lidas={total_lidas}\n")
+        f.write(f"matches={len(linhas_match)}\n")
+        f.write("-----\n")
+        for l in linhas_match:
+            f.write(l + "\n")
 
-    print("\n✅ Sync concluído!")
-    print(f"📄 Arquivo gerado: {out_path}")
-    print(f"🎯 Linhas filtradas: {len(linhas_match)}")
-    input("\nEnter para voltar...")
+    return out_path, len(txts), total_lidas, len(linhas_match)

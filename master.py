@@ -604,14 +604,19 @@ def main():
                 print(f"Erro ao configurar prêmios: {e}")
                 input("\nEnter...")
 
-
         elif escolha == '7':
             limpar_tela()
             try:
-                premios_manager.sync_filtrado_inicial_por_watchlist()
+                out_path, arqs, lidas, matches = premios_manager.gerar_lista_contas_alvo_por_logs()
+                print("✅ SYNC finalizado!")
+                print(f"   Arquivos lidos: {arqs}")
+                print(f"   Linhas lidas:   {lidas}")
+                print(f"   Matches:        {matches}")
+                print(f"   Saída:          {out_path}")
+                input("\nEnter...")
             except Exception as e:
                 print(f"Erro: {e}")
-                input("\nEnter...")
+            input("\nEnter...")
 
 
 
@@ -624,4 +629,14 @@ def main():
             break
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        try:
+            base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(base, "crash.log"), "w", encoding="utf-8") as f:
+                import traceback
+                f.write(traceback.format_exc())
+        except:
+            pass
+        raise
