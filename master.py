@@ -12,6 +12,8 @@ import tempfile
 import premios_manager
 
 from datetime import datetime
+from premios_manager import configurar_watchlist_manual
+
 
 # Habilita cores no CMD
 os.system('')

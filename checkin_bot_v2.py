@@ -7,7 +7,7 @@ import datetime
 import requests
 import textwrap
 import ctypes
-from premios_manager import carregar_watchlist, normalizar_url
+from premios_manager import carregar_watchlist, normalizar_premio
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
@@ -62,6 +62,14 @@ LOGS_SESSAO = []
 SESSION_ID = None
 LOG_FILE_PATH = None
 PREMIOS_FILE_PATH = None
+
+
+def get_premios_filtrados_path():
+    base_dir = get_base_path()
+    premios_dir = os.path.join(base_dir, "premios")
+    os.makedirs(premios_dir, exist_ok=True)
+    return os.path.join(premios_dir, "premios_filtrados.txt")
+
 
 
 # --- CONFIG MANAGER ---
@@ -223,29 +231,20 @@ def append_log_premios_bruto(email: str, premios: list, giros_total: int):
         pass
 
 
-def append_log_premios_filtrado(email: str, premios_filtrados: list, giros_total: int):
-    """
-    Arquivo ÚNICO (append-only): premios/filtrado/premios_filtrados.txt
-    """
-    try:
-        if not premios_filtrados:
-            return
-        if not PREMIOS_FILTRADO_FILE_PATH:
-            iniciar_sessao_logs()
+def append_log_premios_filtrado(email: str, premios: list, giros_total: int):
+    if not premios:
+        return
 
-        # header 1x
-        if not os.path.exists(PREMIOS_FILTRADO_FILE_PATH) or os.path.getsize(PREMIOS_FILTRADO_FILE_PATH) == 0:
-            with open(PREMIOS_FILTRADO_FILE_PATH, "a", encoding="utf-8") as f:
-                f.write("===== PREMIOS FILTRADOS (APPEND-ONLY) =====\n")
+    path = get_premios_filtrados_path()
 
-        agora = datetime.datetime.now().strftime("%H:%M:%S")
-        premios_txt = " + ".join([p.strip() for p in premios_filtrados if p and str(p).strip()])
-        linha = f"[{agora}] {email} | giros={giros_total} | {premios_txt}"
+    agora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    premios_txt = " + ".join(premios)
 
-        with open(PREMIOS_FILTRADO_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(linha + "\n")
-    except:
-        pass
+    linha = f"[{agora}] {email} | giros={giros_total} | {premios_txt}"
+
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(linha + "\n")
+
 
 
 
@@ -635,14 +634,16 @@ def processar(page, conta, url, index, total):
                             append_log_premios_bruto(email, premios, giros_total)
 
                             # ✅ LOG FILTRADO (só grava se tiver match com watchlist do mesmo evento)
-                            wl = carregar_watchlist()
-                            url_norm = normalizar_url(url)
-                            wl_url = normalizar_url((wl or {}).get("event_url", ""))
+                            wl = carregar_watchlist() or {}
+                            alvo_norm = set(wl.get("selected_norm") or [normalizar_premio(x) for x in (wl.get("selected") or [])])
 
                             premios_filtrados = []
-                            if wl and wl_url and wl_url == url_norm:
-                                alvo = set((wl.get("selected") or []))
-                                premios_filtrados = [p for p in premios if p in alvo]
+                            for p in premios:
+                                if normalizar_premio(p) in alvo_norm:
+                                    premios_filtrados.append(p)
+
+
+
 
                             append_log_premios_filtrado(email, premios_filtrados, giros_total)
 
