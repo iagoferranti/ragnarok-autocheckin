@@ -1,12 +1,23 @@
 {
   "selected": [
     "100x Artefato Oval",
-    "200x Bênção do Ferreiro",
-    "100x Bênção do Ferreiro",
-    "10x Bênção do Ferreiro",
-    "5x Bênção do Ferreiro",
-    "2x Bênção do Ferreiro",
-    "5x Martelo de Refino Sombrio"
+    "200x Benção do Ferreiro",
+    "100x Benção do Ferreiro",
+    "10x Benção do Ferreiro",
+    "5x Benção do Ferreiro",
+    "2x Benção do Ferreiro",
+    "5x Martelo Refino Sombrio",
+    "5x MARTELO DE REFINO SOMBRIO"
   ],
-  "updated_at_epoch": 1766083541
+  "selected_norm": [
+    "100x artefato oval",
+    "200x bencao do ferreiro",
+    "100x bencao do ferreiro",
+    "10x bencao do ferreiro",
+    "5x bencao do ferreiro",
+    "2x bencao do ferreiro",
+    "5x martelo refino sombrio",
+    "5x martelo de refino sombrio"
+  ],
+  "updated_at_epoch": 1766157431
 }

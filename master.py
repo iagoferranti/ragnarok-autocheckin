@@ -9,11 +9,18 @@ import ctypes
 import shutil
 import re
 import tempfile
-import premios_manager
+import json_cleaner 
+import provider_smailpro
+import provider_email
 
 from datetime import datetime
-from premios_manager import configurar_watchlist_manual
 
+# Tenta importar premios_manager com tratamento de erro
+try:
+    import premios_manager
+    from premios_manager import configurar_watchlist_manual
+except ImportError:
+    premios_manager = None
 
 # Habilita cores no CMD
 os.system('')
@@ -76,12 +83,24 @@ def definir_titulo():
     if os.name == 'nt':
         ctypes.windll.kernel32.SetConsoleTitleW(f"Ragnarok Master Tool v{VERSAO_ATUAL} | Premium Edition")
 
-# --- IMPORTAÇÃO SEGURA ---
+# --- IMPORTAÇÃO SEGURA (MODO BLINDADO) ---
 try:
-    import fabricador
+    # 1. FORÇA o PyInstaller a incluir o provider_email no pacote
+    import provider_email 
+    
+    # 2. Importa DIRETAMENTE o módulo main, sem passar pelo __init__ do pacote
+    # Isso evita o erro "cannot import name 'main'"
+    from fabricador.main import executar as executar_fabricador
+    
+    # 3. Outros módulos
     import checkin_bot_v2
     import gerador_otp
+    import uti_contas 
+    import premios_manager
+    # json_cleaner já foi importado no topo
+    
     MODULOS_OK = True
+
 except ImportError as e:
     MODULOS_OK = False
     ERRO_MODULO = str(e)
@@ -136,6 +155,12 @@ def criar_config_interativo():
 
     print(f"{Cores.AMARELO}[3] LICENÇA{Cores.RESET}")
     config["licenca_email"] = input("   >> E-mail da Licença: ").strip()
+
+    print(f"{Cores.AMARELO}[4] SMAILPRO API (Opcional - Recomendado){Cores.RESET}")
+    print(f"{Cores.CINZA}Se você tem chave da SmailPro para gerar GMAIL/OUTLOOK.{Cores.RESET}")
+    sk = input("   >> API Key SmailPro: ").strip()
+    if sk:
+        config["smailpro_key"] = sk
 
     try:
         with open(ARQUIVO_CONFIG, "w", encoding="utf-8") as f:
@@ -334,27 +359,33 @@ def autenticar_usuario():
     return None, None
 
 # --- FERRAMENTAS EXTRAS ---
-def unificar_contas():
-    limpar_tela()
-    exibir_logo()
-    print(f"{Cores.AMARELO}🔗 UNIFICADOR DE CONTAS{Cores.RESET}\n")
+def unificar_contas(silencioso=False):
+    if not silencioso:
+        limpar_tela()
+        exibir_logo()
+        print(f"{Cores.AMARELO}🔗 UNIFICADOR DE CONTAS{Cores.RESET}\n")
 
     if not os.path.exists(ARQUIVO_NOVAS):
-        print(f"⚠️  Arquivo '{ARQUIVO_NOVAS}' vazio.")
-        time.sleep(2); return
+        if not silencioso:
+            print(f"⚠️  Arquivo '{ARQUIVO_NOVAS}' vazio.")
+            time.sleep(2)
+        return 0  # <--- RETORNA 0
 
     try:
         with open(ARQUIVO_NOVAS, "r", encoding="utf-8") as f: novas = json.load(f)
-    except: return
+    except: return 0 # <--- RETORNA 0
 
     # Filtra apenas contas prontas
     validas = [c for c in novas if c.get('status') == 'PRONTA_PARA_FARMAR']
     
     if not validas:
-        print("⚠️  Nenhuma conta com status 'PRONTA_PARA_FARMAR' encontrada.")
-        time.sleep(2); return
+        if not silencioso:
+            print("⚠️  Nenhuma conta com status 'PRONTA_PARA_FARMAR' encontrada.")
+            time.sleep(2)
+        return 0 # <--- RETORNA 0
 
-    print(f"   -> Integrando {len(validas)} novas contas...")
+    if not silencioso:
+        print(f"   -> Integrando {len(validas)} novas contas...")
     
     principais = []
     if os.path.exists(ARQUIVO_PRINCIPAL):
@@ -368,6 +399,9 @@ def unificar_contas():
     for c in validas:
         if c['email'] not in existentes:
             principais.append({"email": c['email'], "password": c['password']})
+            if "seed_otp" in c:
+                principais[-1]["seed_otp"] = c["seed_otp"]
+            
             existentes.add(c['email'])
             count += 1
 
@@ -376,17 +410,25 @@ def unificar_contas():
             with open(ARQUIVO_PRINCIPAL, "w", encoding="utf-8") as f:
                 json.dump(principais, f, indent=4)
             
-            print(f"\n{Cores.VERDE}✅ {count} Contas integradas ao banco principal!{Cores.RESET}")
+            print(f"\n{Cores.VERDE}✅ {count} Novas contas integradas automaticamente!{Cores.RESET}")
             
-            if input(f"\n   >> Limpar arquivo de fabricação? (S/N): ").lower() == 's':
+            # Limpa automático no silencioso
+            if silencioso or input(f"\n   >> Limpar arquivo de fabricação? (S/N): ").lower() == 's':
                 with open(ARQUIVO_NOVAS, "w") as f: json.dump([], f)
-                print(f"   🗑️  Arquivo temporário limpo.")
-        except: print("❌ Erro ao salvar.")
+                if not silencioso: print(f"   🗑️  Arquivo temporário limpo.")
+            
+            return count  # <--- AQUI ESTÁ A CHAVE: Retorna quantas salvou
+        except: 
+            print("❌ Erro ao salvar.")
+            return 0
     else:
-        print("\nℹ️  Todas as contas já estavam cadastradas.")
+        if not silencioso:
+            print("\nℹ️  Todas as contas já estavam cadastradas.")
+        return 0 # <--- RETORNA 0
     
-    input("\nEnter para voltar...")
-
+    if not silencioso:
+        input("\nEnter para voltar...")
+    return 0
 
 
 
@@ -458,12 +500,6 @@ def desligar_com_contagem(segundos=30):
         desligar_computador(segundos)
 
 
-
-
-
-
-
-
 # --- MENU PRINCIPAL ---
 def main():
     definir_titulo()
@@ -498,39 +534,57 @@ def main():
         # Menu Dinâmico
         opcoes = []
         
+        # --- FABRICADOR ---
         if "all" in perms or "fabricador" in perms:
             print(f"   {Cores.VERDE}[1]{Cores.RESET} 🏭 Fabricador de Contas")
             opcoes.append('1')
         else:
             print(f"   {Cores.CINZA}[1] 🔒 Fabricador (Bloqueado){Cores.RESET}")
 
+        # --- AUTO FARM ---
         if "all" in perms or "checkin" in perms:
             print(f"   {Cores.VERDE}[2]{Cores.RESET} 🎰 Auto Farm (Check-in + Roleta)")
             opcoes.append('2')
         else:
             print(f"   {Cores.CINZA}[2] 🔒 Auto Farm (Bloqueado){Cores.RESET}")
 
+        # --- AUTHENTICATOR ---
         print(f"   {Cores.VERDE}[3]{Cores.RESET} 🔐 Gerador de OTP (Authenticator)")
         opcoes.append('3')
 
+        # --- FABRICADOR + SHUTDOWN ---
         if "all" in perms or "fabricador" in perms:
             print(f"   {Cores.VERDE}[4]{Cores.RESET} 🏭 Fabricador + Desligar")
             opcoes.append('4')
         else:
             print(f"   {Cores.CINZA}[4] 🔒 Fabricador + Desligar (Bloqueado){Cores.RESET}")
 
+        # --- AUTO FARM + SHUTDOWN ---
         if "all" in perms or "checkin" in perms:
             print(f"   {Cores.VERDE}[5]{Cores.RESET} 🎰 Auto Farm + Desligar")
             opcoes.append('5')
         else:
             print(f"   {Cores.CINZA}[5] 🔒 Auto Farm + Desligar (Bloqueado){Cores.RESET}")
         
+        # --- EXTRAS ---
+        print(f"{Cores.CINZA}   {'-'*30}{Cores.RESET}") # Separador visual
+
         if "all" in perms or "checkin" in perms:
             print(f"   {Cores.VERDE}[6]{Cores.RESET} 🎁 Configurar Prêmios do Log")
             opcoes.append('6')
 
-        print(f"   {Cores.VERDE}[7]{Cores.RESET} 📌 Sync inicial: filtrar logs antigos por Watchlist")
+        print(f"   {Cores.VERDE}[7]{Cores.RESET} 📌 Sync Logs (Watchlist)")
         opcoes.append('7')
+        
+        print(f"   {Cores.VERDE}[8]{Cores.RESET} 🔗 Unificar Contas Novas")
+        opcoes.append('8')
+
+        # === NOVA OPÇÃO: UTI ===
+        print(f"   {Cores.VERDE}[9]{Cores.RESET} 🚑 UTI de Contas (Reparar Falhas)")
+        opcoes.append('9')
+
+        print(f"   {Cores.VERDE}[10]{Cores.RESET} 🧹 Faxina JSON (Limpar Lixo)")
+        opcoes.append('10')
 
         print(f"\n   {Cores.VERMELHO}[0]{Cores.RESET} Sair")
         opcoes.append('0')
@@ -541,11 +595,30 @@ def main():
             print(f"\n{Cores.VERMELHO}Opção inválida.{Cores.RESET}")
             time.sleep(1); continue
 
+        # --- LÓGICA DAS OPÇÕES ---
+
         if escolha == '1':
             limpar_tela()
-            try: fabricador.executar()
+            try: 
+                # 1. Fabrica
+                executar_fabricador()
+                
+                # 2. Unifica e pega o número de sucessos
+                qtd_novas = unificar_contas(silencioso=True)
+                
+                # 3. Lógica Automática
+                if qtd_novas > 0:
+                    print(f"\n{Cores.AMARELO}🚀 Detectadas {qtd_novas} novas contas! Iniciando Auto Farm...{Cores.RESET}")
+                    print(f"{Cores.CINZA}(Se quiser cancelar, feche a janela agora){Cores.RESET}")
+                    time.sleep(5) # Dá 5 segundos pro usuário ler, depois arranca
+                    
+                    checkin_bot_v2.executar()
+                else:
+                    print(f"\n{Cores.CINZA}⚠️ Nenhuma conta nova foi criada/unificada. Voltando ao menu...{Cores.RESET}")
+                    time.sleep(3)
+
             except Exception as e: 
-                print(f"{Cores.VERMELHO}Erro no módulo Fabricador: {e}{Cores.RESET}")
+                print(f"{Cores.VERMELHO}Erro no fluxo Fabricador: {e}{Cores.RESET}")
                 input()
 
         elif escolha == '2':
@@ -569,25 +642,31 @@ def main():
             limpar_tela()
             if not confirmar_desligamento(timeout=10):
                 print(f"{Cores.CINZA}Cancelado. Voltando ao menu...{Cores.RESET}")
-                time.sleep(1)
-                continue
-
+                time.sleep(1); continue
             try:
-                fabricador.executar()
+                # 1. Fabrica
+                executar_fabricador()
+                
+                # 2. Unifica
+                qtd_novas = unificar_contas(silencioso=True)
+                
+                # 3. Farma SEMPRE (Para garantir o dia das contas velhas também)
+                print(f"\n{Cores.AMARELO}🔄 Rodando Auto Farm completo antes de desligar...{Cores.RESET}")
+                try:
+                    checkin_bot_v2.executar()
+                except: pass # Se o farm der erro, desliga o PC mesmo assim
+                
             except Exception as e:
                 print(f"{Cores.VERMELHO}Erro no módulo Fabricador: {e}{Cores.RESET}")
                 input("\nEnter...")
             finally:
                 desligar_computador(segundos=30)
 
-
         elif escolha == '5':
             limpar_tela()
             if not confirmar_desligamento(timeout=10):
                 print(f"{Cores.CINZA}Cancelado. Voltando ao menu...{Cores.RESET}")
-                time.sleep(1)
-                continue
-
+                time.sleep(1); continue
             try:
                 checkin_bot_v2.executar()
             except Exception as e:
@@ -599,7 +678,8 @@ def main():
         elif escolha == '6':
             limpar_tela()
             try:
-                premios_manager.configurar_watchlist_manual()
+                if premios_manager: premios_manager.configurar_watchlist_manual()
+                else: print("Módulo de prêmios não carregado.")
             except Exception as e:
                 print(f"Erro ao configurar prêmios: {e}")
                 input("\nEnter...")
@@ -607,21 +687,38 @@ def main():
         elif escolha == '7':
             limpar_tela()
             try:
-                out_path, arqs, lidas, matches = premios_manager.gerar_lista_contas_alvo_por_logs()
-                print("✅ SYNC finalizado!")
-                print(f"   Arquivos lidos: {arqs}")
-                print(f"   Linhas lidas:   {lidas}")
-                print(f"   Matches:        {matches}")
-                print(f"   Saída:          {out_path}")
+                if premios_manager:
+                    out_path, arqs, lidas, matches = premios_manager.sync_premios_filtrados_incremental()
+                    print("✅ SYNC finalizado!")
+                    print(f"   Arquivos: {arqs} | Linhas: {lidas} | Matches: {matches}")
+                else:
+                    print("Módulo de prêmios não carregado.")
                 input("\nEnter...")
             except Exception as e:
                 print(f"Erro: {e}")
             input("\nEnter...")
 
+        elif escolha == '8':
+            unificar_contas()
 
+        elif escolha == '9':
+            limpar_tela()
+            try:
+                if uti_contas:
+                    uti_contas.executar()
+                else:
+                    print(f"{Cores.VERMELHO}Módulo UTI não carregado.{Cores.RESET}")
+                    input("\nEnter...")
+            except Exception as e:
+                print(f"{Cores.VERMELHO}Erro na UTI: {e}{Cores.RESET}")
+                input("\nEnter...")
 
-
-
+        elif escolha == '10':
+            try:
+                json_cleaner.executar()
+            except Exception as e:
+                print(f"Erro na limpeza: {e}")
+                input("\nEnter...")
 
         elif escolha == '0':
             print("\nEncerrando sistema...")

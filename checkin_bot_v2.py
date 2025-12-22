@@ -4,88 +4,48 @@ import json
 import time
 import random
 import datetime
-import requests
-import textwrap
 import ctypes
-from premios_manager import carregar_watchlist, normalizar_premio
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.common import Keys
 
+# === INTEGRAÇÃO MODULAR CORRIGIDA ===
+from fabricador import config
+from fabricador.modules.logger import (
+    Cores, log_sucesso, log_erro, log_aviso, log_info, log_debug, log_sistema
+)
+# Funções de navegação
+from fabricador.modules.browser import (
+    clicar_com_seguranca,
+    garantir_carregamento,
+    medir_consumo
+)
+# Funções de segurança (O ERRO ESTAVA AQUI, AGORA ESTÁ CORRIGIDO)
+from fabricador.modules.cloudflare_solver import (
+    vencer_cloudflare_obrigatorio,
+    checar_bloqueio_ip,
+    fechar_cookies
+)
+from fabricador.modules.files import (
+    carregar_json_seguro,
+    salvar_json_seguro
+)
 
-# ==============================================================================
-# 📊 MEDIDOR DE CONSUMO DE DADOS
-# ==============================================================================
-ACUMULADO_MB = 0
+# === IMPORTAÇÃO OPCIONAL DE PRÊMIOS ===
+try:
+    from premios_manager import carregar_watchlist, normalizar_premio
+    TEM_PREMIOS = True
+except ImportError:
+    TEM_PREMIOS = False
 
-def medir_consumo(page, etapa=""):
-    """Soma o peso da página atual ao contador global."""
-    global ACUMULADO_MB
-    try:
-        # Script JS que soma o tamanho de HTML + Imagens + CSS + Scripts baixados
-        js_script = """
-        var total = 0;
-        performance.getEntries().forEach(entry => {
-            if (entry.transferSize) { total += entry.transferSize; }
-        });
-        return total;
-        """
-        bytes_pagina = page.run_js(js_script)
-        mb_pagina = bytes_pagina / (1024 * 1024)
-        
-        ACUMULADO_MB += mb_pagina
-        print(f"{Cores.MAGENTA}📊 [Gasto Dados] {etapa}: +{mb_pagina:.3f} MB | Total Sessão: {ACUMULADO_MB:.3f} MB{Cores.RESET}")
-    except:
-        pass
-# ==============================================================================
-
-os.system('') # Cores CMD
-
-# --- CLASSE DE ESTILO ---
-class Cores:
-    RESET = '\033[0m'
-    VERDE = '\033[92m'
-    AMARELO = '\033[93m'
-    VERMELHO = '\033[91m'
-    CIANO = '\033[96m'
-    AZUL = '\033[94m'
-    MAGENTA = '\033[95m'
-    CINZA = '\033[90m'
-    NEGRITO = '\033[1m'
-
-# ===== CONFIGURAÇÕES =====
+# ===== VARIÁVEIS GLOBAIS =====
 ARQUIVO_HISTORICO = "historico_diario.json"
-ARQUIVO_CONFIG = "config.json"
-ARQUIVO_CONTAS = "accounts.json"
-
 LOGS_SESSAO = []
-
 SESSION_ID = None
 LOG_FILE_PATH = None
-PREMIOS_FILE_PATH = None
+PREMIOS_BRUTO_FILE_PATH = None
+PREMIOS_FILTRADO_FILE_PATH = None
 
-
-def get_premios_filtrados_path():
-    base_dir = get_base_path()
-    premios_dir = os.path.join(base_dir, "premios")
-    os.makedirs(premios_dir, exist_ok=True)
-    return os.path.join(premios_dir, "premios_filtrados.txt")
-
-
-
-# --- CONFIG MANAGER ---
-def carregar_config():
-    padrao = {"headless": False, "telegram_token": "", "telegram_chat_id": ""}
-    if not os.path.exists(ARQUIVO_CONFIG): return padrao 
-    try:
-        with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as f:
-            user = json.load(f)
-            padrao.update(user)
-            return padrao
-    except: return padrao
-
-CONF = carregar_config()
-
-# --- VISUAL & LOGS ---
+# --- VISUAL ---
 def definir_titulo(texto):
     if os.name == 'nt':
         try: ctypes.windll.kernel32.SetConsoleTitleW(texto)
@@ -98,31 +58,12 @@ def exibir_banner_farm():
     ╚══════════════════════════════════════════════════════════════╝
     {Cores.RESET}""")
 
+# --- LOGS ESPECÍFICOS DE FARM ---
 def log_step(icone, texto, cor=Cores.RESET):
     print(f"   {cor}{icone} {texto}{Cores.RESET}")
 
-def log_debug(texto):
-    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-    print(f"      {Cores.CINZA}[DEBUG {timestamp}] {texto}{Cores.RESET}")
-
-def log_sistema(msg): 
-    print(f"{Cores.CINZA}    └── {msg}{Cores.RESET}")
-
-def log_sucesso(msg): 
-    print(f"{Cores.VERDE} ✅ {Cores.NEGRITO}SUCESSO:{Cores.RESET} {msg}")
-
-def log_aviso(msg): 
-    print(f"{Cores.AMARELO} ⚠️  {Cores.NEGRITO}ALERTA:{Cores.RESET} {msg}")
-
-def log_erro(msg): 
-    print(f"{Cores.VERMELHO} ❌ {Cores.NEGRITO}ERRO:{Cores.RESET} {msg}")
-
-# --- UTILITÁRIOS ---
-def get_base_path():
-    if getattr(sys, 'frozen', False): return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
-
 def registrar_log(email, status, obs=""):
+    """Registra o resultado final de uma conta no log e na tela."""
     agora = datetime.datetime.now().strftime("%H:%M:%S")
     linha = f"[{agora}] {email} -> {status} {f'({obs})' if obs else ''}"
 
@@ -135,333 +76,145 @@ def registrar_log(email, status, obs=""):
     print(f"\n   {Cores.NEGRITO}STATUS:{Cores.RESET} {icone} {cor_status}{status}{Cores.RESET}")
     if obs: print(f"   {Cores.CINZA}OBS: {obs}{Cores.RESET}")
 
-    LOGS_SESSAO.append(linha)           # mantém em memória
-    append_log_operacional(linha)       # ✅ grava no arquivo A CADA CONTA
+    LOGS_SESSAO.append(linha)
+    append_log_operacional(linha)
 
+# --- SISTEMA DE ARQUIVOS DE LOG ---
+def get_base_path():
+    if getattr(sys, 'frozen', False): return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 def garantir_pastas_logs():
     base_dir = get_base_path()
     logs_dir = os.path.join(base_dir, "logs")
-
     premios_dir = os.path.join(base_dir, "premios")
-    premios_bruto_dir = os.path.join(premios_dir, "bruto")
-    premios_filtrado_dir = os.path.join(premios_dir, "filtrado")
-
     os.makedirs(logs_dir, exist_ok=True)
-    os.makedirs(premios_bruto_dir, exist_ok=True)
-    os.makedirs(premios_filtrado_dir, exist_ok=True)
-
-    return logs_dir, premios_bruto_dir, premios_filtrado_dir
-
-
-
-
-def parse_escolha_indices(s: str, max_n: int):
-    # aceita: "1, 3,6,10" / "1 3 6 10" / "1;3;6;10"
-    if not s:
-        return []
-    s = s.replace(";", ",").replace(" ", ",")
-    partes = [p.strip() for p in s.split(",") if p.strip()]
-    out = []
-    for p in partes:
-        if not p.isdigit():
-            continue
-        i = int(p)
-        if 1 <= i <= max_n:
-            out.append(i)
-    # remove duplicados mantendo ordem
-    seen = set()
-    out2 = []
-    for i in out:
-        if i not in seen:
-            out2.append(i); seen.add(i)
-    return out2
-
-
-PREMIOS_BRUTO_FILE_PATH = None
-PREMIOS_FILTRADO_FILE_PATH = None
+    os.makedirs(os.path.join(premios_dir, "bruto"), exist_ok=True)
+    os.makedirs(os.path.join(premios_dir, "filtrado"), exist_ok=True)
+    return logs_dir, os.path.join(premios_dir, "bruto"), os.path.join(premios_dir, "filtrado")
 
 def iniciar_sessao_logs():
     global SESSION_ID, LOG_FILE_PATH, PREMIOS_BRUTO_FILE_PATH, PREMIOS_FILTRADO_FILE_PATH
-
-    logs_dir, premios_bruto_dir, premios_filtrado_dir = garantir_pastas_logs()
+    logs_dir, pb_dir, pf_dir = garantir_pastas_logs()
 
     if SESSION_ID is None:
         SESSION_ID = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     LOG_FILE_PATH = os.path.join(logs_dir, f"log_execucao_{SESSION_ID}.txt")
+    PREMIOS_BRUTO_FILE_PATH = os.path.join(pb_dir, f"premios_{SESSION_ID}.txt")
+    PREMIOS_FILTRADO_FILE_PATH = os.path.join(pf_dir, "premios_filtrados.txt")
 
-    PREMIOS_BRUTO_FILE_PATH = os.path.join(premios_bruto_dir, f"premios_{SESSION_ID}.txt")
-    PREMIOS_FILTRADO_FILE_PATH = os.path.join(premios_filtrado_dir, f"premios_filtrados.txt")
-
-    # Header log operacional
-    if not os.path.exists(LOG_FILE_PATH) or os.path.getsize(LOG_FILE_PATH) == 0:
-        with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+    if not os.path.exists(LOG_FILE_PATH):
+        with open(LOG_FILE_PATH, "w", encoding="utf-8") as f:
             f.write(f"===== LOG EXECUCAO {SESSION_ID} =====\n")
 
-def append_log_operacional(linha: str):
-    """Append a cada conta (não perde log se travar)."""
+def append_log_operacional(linha):
+    if not LOG_FILE_PATH: iniciar_sessao_logs()
     try:
-        if not LOG_FILE_PATH:
-            iniciar_sessao_logs()
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(linha.rstrip() + "\n")
-    except:
-        pass
-
-def append_log_premios_bruto(email: str, premios: list, giros_total: int):
-    try:
-        if not premios:
-            return
-        if not PREMIOS_BRUTO_FILE_PATH:
-            iniciar_sessao_logs()
-
-        # header 1x
-        if not os.path.exists(PREMIOS_BRUTO_FILE_PATH) or os.path.getsize(PREMIOS_BRUTO_FILE_PATH) == 0:
-            with open(PREMIOS_BRUTO_FILE_PATH, "a", encoding="utf-8") as f:
-                f.write(f"===== PREMIOS BRUTO {SESSION_ID} =====\n")
-
-        agora = datetime.datetime.now().strftime("%H:%M:%S")
-        premios_txt = " + ".join([p.strip() for p in premios if p and str(p).strip()])
-        linha = f"[{agora}] {email} | giros={giros_total} | {premios_txt}"
-
-        with open(PREMIOS_BRUTO_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(linha + "\n")
-    except:
-        pass
-
-
-def append_log_premios_filtrado(email: str, premios: list, giros_total: int):
-    if not premios:
-        return
-
-    path = get_premios_filtrados_path()
-
-    agora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    premios_txt = " + ".join(premios)
-
-    linha = f"[{agora}] {email} | giros={giros_total} | {premios_txt}"
-
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(linha + "\n")
-
-
-
-
-
-# --- JSON HELPERS ---
-def carregar_json_seguro(caminho):
-    if not os.path.exists(caminho): return []
-    try: 
-        with open(caminho, "r", encoding="utf-8") as f: return json.load(f)
-    except: return []
-
-def salvar_json_seguro(caminho, dados):
-    try: 
-        with open(caminho, "w", encoding="utf-8") as f: json.dump(dados, f, indent=4)
     except: pass
 
+def append_log_premios_bruto(email, premios, giros):
+    if not premios: return
+    if not PREMIOS_BRUTO_FILE_PATH: iniciar_sessao_logs()
+    try:
+        agora = datetime.datetime.now().strftime("%H:%M:%S")
+        premios_txt = " + ".join([str(p).strip() for p in premios if p])
+        linha = f"[{agora}] {email} | giros={giros} | {premios_txt}"
+        with open(PREMIOS_BRUTO_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(linha + "\n")
+    except: pass
+
+def append_log_premios_filtrado(email, premios, giros):
+    if not premios: return
+    if not PREMIOS_FILTRADO_FILE_PATH: iniciar_sessao_logs()
+    try:
+        agora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        premios_txt = " + ".join(premios)
+        linha = f"[{agora}] {email} | giros={giros} | {premios_txt}"
+        with open(PREMIOS_FILTRADO_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(linha + "\n")
+    except: pass
+
+# --- GERENCIAMENTO DE HISTÓRICO ---
 def carregar_historico_hoje():
     hoje = datetime.datetime.now().strftime("%Y-%m-%d")
     dados = carregar_json_seguro(ARQUIVO_HISTORICO)
-    if isinstance(dados, list): dados = {}
-    if dados.get("data") == hoje: return set(dados.get("contas", []))
+    if isinstance(dados, list): dados = {} 
+    if dados.get("data") == hoje: 
+        return set(dados.get("contas", []))
     return set()
 
 def adicionar_ao_historico(email):
     hoje = datetime.datetime.now().strftime("%Y-%m-%d")
     dados = carregar_json_seguro(ARQUIVO_HISTORICO)
-    if isinstance(dados, list): dados = {"data": hoje, "contas": []}
-    if dados.get("data") != hoje: dados = {"data": hoje, "contas": []}
+    
+    if isinstance(dados, list) or dados.get("data") != hoje: 
+        dados = {"data": hoje, "contas": []}
+    
     if email not in dados["contas"]:
         dados["contas"].append(email)
         salvar_json_seguro(ARQUIVO_HISTORICO, dados)
 
-def setup_contas():
-    path = os.path.join(get_base_path(), ARQUIVO_CONTAS)
-    contas = carregar_json_seguro(path)
-    if not contas:
-        print(f"\n{Cores.AMARELO}⚠️  Nenhuma conta encontrada em '{ARQUIVO_CONTAS}'!{Cores.RESET}")
-        return []
-    return contas
-
-def verificar_licenca_online(permissao_necessaria="all"):
-    try:
-        from master import verificar_licenca_online as v
-        return v(permissao_necessaria)
-    except: return True
-
 # --- INTERAÇÃO HUMANA ---
 def digitar_como_humano(page, seletor, texto):
-    for tentativa in range(3): # Tenta 3 vezes
+    """Digita devagar para parecer humano."""
+    for _ in range(3):
         try:
             ele = page.ele(seletor, timeout=2)
-            if ele and ele.states.is_displayed:
+            if ele:
                 ele.click()
                 time.sleep(0.3)
                 ele.clear()
                 time.sleep(0.3)
-                #log_debug(f"Digitando '{texto[:2]}***' em {seletor}")
-                page.actions.type(texto)
+                page.actions.type(texto) # DrissionPage type é seguro
                 time.sleep(0.5)
                 return True
-            else:
-                log_debug(f"Elemento {seletor} não visível na tentativa {tentativa+1}")
-        except Exception as e:
-            #log_debug(f"Erro ao digitar: {e}")
-            time.sleep(1.5)
+        except: time.sleep(1)
     return False
 
-def interagir_com_seguranca(page, seletor, acao="click", texto=None, timeout=5):
-    inicio = time.time()
-    while time.time() - inicio < timeout:
-        try:
-            ele = page.ele(seletor)
-            if ele and ele.states.is_displayed: 
-                if acao == "click":
-                    #log_debug(f"Clicando em {seletor}")
-                    ele.click()
-                elif acao == "input":
-                    return digitar_como_humano(page, seletor, texto)
-                return True
-        except Exception: 
-            time.sleep(0.5) 
-    #log_debug(f"Falha ao interagir com {seletor}")
-    return False
-
-# --- BROWSER ACTIONS ---
-def fechar_cookies(page):
-    try:
-        if page.ele('.cookieprivacy_btn__Pqz8U', timeout=1): page.ele('.cookieprivacy_btn__Pqz8U').click()
-        elif page.ele('text=concordo.', timeout=1): page.ele('text=concordo.').click()
-    except: pass
-
-def checar_bloqueio_ip(page):
-    try:
-        if "429" in page.title or "too many requests" in page.ele('tag:body').text.lower():
-            print(f"\n{Cores.VERMELHO}🚨 BLOQUEIO DE IP (429){Cores.RESET}")
-            input(f"\n{Cores.VERDE}>>> Troque o IP e pressione ENTER...{Cores.RESET}")
-            page.refresh(); time.sleep(5); return True
-    except: pass
-    return False
-
-# --- CLOUDFLARE "OLHOS DE ÁGUIA" (Portado do Fabricador V4.7) ---
-def vencer_cloudflare_obrigatorio(page):
-    log_sistema("Verificando Cloudflare...")
-    fechar_cookies(page)
-    checar_bloqueio_ip(page)
-    
-    inicio_tentativa = time.time()
-    
-    while time.time() - inicio_tentativa < 50:
-        ele_msg = page.ele('.turnstile_turnstileMessage__grLkv p') or \
-                  page.ele('text:Verificação de segurança para acesso concluída') or \
-                  page.ele('text:Verificando segurança para acesso')
-
-        status_texto = "Desconhecido"
-        if ele_msg and ele_msg.states.is_displayed:
-            status_texto = ele_msg.text
-            #log_debug(f"Status Visual CF: {status_texto}")
-
-        if "concluída" in status_texto.lower() or "sucesso" in status_texto.lower() or "success" in status_texto.lower():
-            log_sucesso("Cloudflare Validado!")
-            time.sleep(1) 
-            return True
-
-        ele_sucesso_icon = page.ele('.page_success__gilOx')
-        if ele_sucesso_icon and ele_sucesso_icon.states.is_displayed:
-             #log_debug("Cloudflare: Ícone de sucesso visível.")
-             log_sucesso("Cloudflare Validado!")
-             return True
-
-        if "verificando" in status_texto.lower() or status_texto == "Desconhecido":
-            # log_sistema("Cloudflare pendente. Tentando manobra (Foco Email -> Shift+Tab)...")
-            
-            if page.ele('#email'):
-                try: 
-                    page.ele('#email').click()
-                    time.sleep(0.2)
-                except: pass
-            else:
-                try: page.ele('tag:body').click()
-                except: pass
-            
-            for _ in range(4):
-                page.actions.key_down(Keys.SHIFT).key_down(Keys.TAB).key_up(Keys.TAB).key_up(Keys.SHIFT)
-                time.sleep(0.1)
-            
-            page.actions.key_down(Keys.SPACE).key_up(Keys.SPACE)
-            time.sleep(4) 
-            continue
-
-        if "insuficiente" in status_texto.lower() or "failed" in status_texto.lower():
-            # log_aviso("Cloudflare detectou falha de segurança (Bloqueio). Recarregando página...")
-            page.refresh()
-            time.sleep(4)
-            continue
-
-        time.sleep(1)
-    
-    log_erro("Timeout no Cloudflare. Não foi possível validar.")
-    return False
-
-def garantir_carregamento(page, seletor_esperado, timeout=30):
-    # log_debug(f"Aguardando elemento: {seletor_esperado}")
-    inicio = time.time()
-    while time.time() - inicio < timeout:
-        try:
-            ele = page.ele(seletor_esperado)
-            if ele and ele.states.is_displayed:
-                return True
-        except: pass 
-            
-        if checar_bloqueio_ip(page):
-            inicio = time.time()
-            continue
-        
-        time.sleep(1)
-    return False
-
-# --- FLUXO 1: HOME PAGE ---
+# --- LÓGICA DE NEGÓCIO (HOME & URL) ---
 def preparar_navegador_home(page):
+    """Limpa a sessão e vai para a home."""
     try:
-        # log_debug("Limpando cookies...")
         page.run_cdp('Network.clearBrowserCookies')
         page.run_cdp('Network.clearBrowserCache')
         
         page.get("https://www.gnjoylatam.com/pt")
         
-        try:
-            for x in ['.close_btn', '.modal-close', 'text:FECHAR']:
-                if page.ele(x, timeout=0.5): page.ele(x).click()
-        except: pass
+        # Fecha modais chatos
+        for x in ['.close_btn', '.modal-close', 'text:FECHAR']:
+            if page.ele(x, timeout=0.5): page.ele(x).click()
 
-        if not (page.ele('@alt=LOGIN BUTTON', timeout=1) or page.ele('text:Login', timeout=1) or page.ele('.header_rightlist__btn__5cynY', timeout=1)):
+        # Garante logout se ainda estiver logado
+        if not (page.ele('@alt=LOGIN BUTTON', timeout=1) or page.ele('text:Login', timeout=1)):
              btn_logout = page.ele('.header_logoutBtn__6Pv_m', timeout=2)
-             if btn_logout and btn_logout.states.is_displayed:
+             if btn_logout:
                 log_step("🧹", "Limpando sessão anterior...", Cores.CINZA)
-                interagir_com_seguranca(page, '.header_logoutBtn__6Pv_m', "click")
+                try: btn_logout.click()
+                except: page.run_js("arguments[0].click()", btn_logout)
                 time.sleep(2)
-        # else:
-            # log_debug("Sessão limpa.")
-
     except: pass
 
-# --- FLUXO 2: PEGAR URL ---
 def descobrir_url_evento(page):
+    """Tenta descobrir a URL do evento PonPon/Roleta automaticamente."""
     path = os.path.join(get_base_path(), "config_evento.json")
+    
+    # Cache de 24h
     if os.path.exists(path):
         try:
-            d = json.load(open(path)); 
+            d = json.load(open(path))
             if time.time() - d.get("ts", 0) < 86400: return d['url']
         except: pass
         
     log_step("🔍", "Buscando Evento...", Cores.CIANO)
     url_encontrada = None
     
-    btn = page.ele('text=Máquina PonPon', timeout=5) or page.ele('text:PonPon', timeout=2)
-    if not btn: 
-        btn = page.ele('css:a[href*="roulette"]', timeout=2) or page.ele('css:a[href*="event"]', timeout=2)
+    btn = page.ele('text=Máquina PonPon', timeout=5) or \
+          page.ele('text:PonPon', timeout=2) or \
+          page.ele('css:a[href*="roulette"]', timeout=2) or \
+          page.ele('css:a[href*="event"]', timeout=2)
 
     if btn:
         l = btn.attr('href')
@@ -476,8 +229,7 @@ def descobrir_url_evento(page):
     
     return url_encontrada
 
-
-# --- FLUXO 4: ROLETA ---
+# --- LÓGICA DA ROLETA ---
 def processar_roleta(page):
     premios = []
     giros_total = 0
@@ -487,17 +239,14 @@ def processar_roleta(page):
         if not page.wait.ele_displayed('.styles_attempts_count__iHKXy', timeout=10):
             return [], 0
 
-        try:
-            qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
-        except:
-            qtd = 0
+        try: qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
+        except: qtd = 0
 
         giros_total = qtd
-        if qtd > 0:
-            log_step("🎟️", f"Giros: {qtd}", Cores.AMARELO)
+        if qtd > 0: log_step("🎟️", f"Giros: {qtd}", Cores.AMARELO)
 
         while qtd > 0:
-            if not interagir_com_seguranca(page, '@alt=Start', "click"):
+            if not clicar_com_seguranca(page, '@alt=Start', "Girar Roleta"):
                 break
             time.sleep(1)
 
@@ -513,20 +262,15 @@ def processar_roleta(page):
                     premios.append(nm)
 
                 time.sleep(2)
-                interagir_com_seguranca(page, '.styles_roulette_btn_close__GzdeD', "click")
+                clicar_com_seguranca(page, '.styles_roulette_btn_close__GzdeD', "Fechar Prêmio")
             else:
                 break
 
-            try:
-                qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
-            except:
-                break
+            try: qtd = int(page.ele('.styles_attempts_count__iHKXy').text)
+            except: break
 
-    except:
-        pass
-
+    except: pass
     return premios, giros_total
-
 
 # --- FLUXO PRINCIPAL DE CONTA ---
 def processar(page, conta, url, index, total):
@@ -549,23 +293,21 @@ def processar(page, conta, url, index, total):
         time.sleep(2)
         checar_bloqueio_ip(page)
 
-        # CHECK DE LOGIN NO EVENTO
+        # LOGIN NO EVENTO
         if page.ele('@alt=LOGIN BUTTON') or page.ele('text:Login'):
-            # log_debug("Botão de Login encontrado. Iniciando processo...")
             
-            if interagir_com_seguranca(page, '@alt=LOGIN BUTTON', "click") or interagir_com_seguranca(page, 'text:Login', "click"):
-                # log_debug("Botão clicado. Esperando formulário...")
+            if clicar_com_seguranca(page, '@alt=LOGIN BUTTON', "Login") or \
+               clicar_com_seguranca(page, 'text:Login', "Login Texto"):
                 
                 if garantir_carregamento(page, '#email', timeout=40):
-                    # log_debug("Formulário carregado.")
                     
-                    # --- AQUI ESTÁ A CORREÇÃO: OBRIGA O CLOUDFLARE A PASSAR ANTES DE DIGITAR ---
+                    # === OBRIGA CLOUDFLARE (DO MÓDULO BLINDADO) ===
                     if not vencer_cloudflare_obrigatorio(page):
                         log_st = "ERRO CF"
                         log_step("❌", "Falha no Cloudflare", Cores.VERMELHO)
                         raise Exception("Falha Cloudflare")
 
-                    # AGORA DIGITA COM SEGURANÇA
+                    # DIGITAÇÃO HUMANA
                     res_email = digitar_como_humano(page, '#email', email)
                     res_senha = digitar_como_humano(page, '#password', conta['password'])
                     
@@ -574,25 +316,22 @@ def processar(page, conta, url, index, total):
                         try: page.ele('text=Entrar').click() # Tira foco
                         except: pass
                         
-                        # log_debug("Enviando Login...")
+                        # CLICA EM ENTRAR
+                        clicou = False
+                        if clicar_com_seguranca(page, '.page_loginBtn__JUYeS', "Entrar"): clicou = True
+                        elif clicar_com_seguranca(page, 'text=CONTINUAR', "Continuar"): clicou = True
                         
-                        # Tenta clicar no botão específico ou dar Enter
-                        clicou_login = False
-                        if interagir_com_seguranca(page, '.page_loginBtn__JUYeS', "click"): clicou_login = True
-                        elif interagir_com_seguranca(page, 'text=CONTINUAR', "click"): clicou_login = True
-                        
-                        if not clicou_login:
+                        if not clicou:
                              page.actions.key_down(Keys.ENTER).key_up(Keys.ENTER)
                         
-                        # VERIFICA ERROS ANTES DE ESPERAR LOGOUT
                         time.sleep(3)
-                        erro_login = page.ele('.input_errorMsg__hM_98') or page.ele('text:A segurança para acesso é insuficiente')
-                        if erro_login and erro_login.states.is_displayed:
+                        # Checa erro
+                        erro = page.ele('.input_errorMsg__hM_98') or page.ele('text:A segurança para acesso é insuficiente')
+                        if erro and erro.states.is_displayed:
                              log_st = "FALHA AUTH"
-                             log_step("❌", f"Erro no site: {erro_login.text}", Cores.VERMELHO)
+                             log_step("❌", f"Erro: {erro.text}", Cores.VERMELHO)
                              return False
 
-                        # log_debug("Aguardando confirmação de login...")
                         if garantir_carregamento(page, 'text:Logout', timeout=60):
                             log_step("🔓", "Login Efetuado", Cores.VERDE)
                             
@@ -601,19 +340,16 @@ def processar(page, conta, url, index, total):
                             
                             # CHECK-IN
                             page.scroll.to_bottom()
-                            btn_check = page.ele('tag:img@@alt=attendance button')
-                            if not btn_check: 
-                                btn_check = page.ele('text:FAZER CHECK-IN')
+                            btn_check = page.ele('tag:img@@alt=attendance button') or page.ele('text:FAZER CHECK-IN')
 
                             if btn_check:
-                                if "complete" in str(btn_check.attr("src")):
+                                if "complete" in str(btn_check.attr("src") or ""):
                                     log_st = "JÁ FEITO"
                                     log_step("📅", "Check-in já feito hoje", Cores.AMARELO)
                                     sucesso_conta = True
                                 else:
                                     btn_check.click()
                                     time.sleep(1)
-
                                     alerta = page.handle_alert(accept=True)
                                     if alerta:
                                         log_step("⚠️", f"Aviso: {alerta}", Cores.AMARELO)
@@ -627,35 +363,21 @@ def processar(page, conta, url, index, total):
                                         log_step("📅", "Check-in realizado!", Cores.VERDE)
                                         sucesso_conta = True
 
-                            # ✅ ROLETA (sempre tenta rodar, mesmo se já tinha feito check-in)
+                            # ROLETA
                             premios, giros_total = processar_roleta(page)
-
-                            # ✅ LOG BRUTO (só grava se tiver prêmio)
                             append_log_premios_bruto(email, premios, giros_total)
 
-                            # ✅ LOG FILTRADO (só grava se tiver match com watchlist do mesmo evento)
-                            wl = carregar_watchlist() or {}
-                            alvo_norm = set(wl.get("selected_norm") or [normalizar_premio(x) for x in (wl.get("selected") or [])])
+                            # FILTRAGEM DE PRÊMIOS (SE TIVER MODULO)
+                            if TEM_PREMIOS:
+                                wl = carregar_watchlist() or {}
+                                alvo_norm = set(wl.get("selected_norm") or [normalizar_premio(x) for x in (wl.get("selected") or [])])
+                                premios_filtrados = [p for p in premios if normalizar_premio(p) in alvo_norm]
+                                append_log_premios_filtrado(email, premios_filtrados, giros_total)
+                                if premios_filtrados:
+                                    msg = f"ROULETA: {giros_total} giros | " + " + ".join(premios_filtrados)
 
-                            premios_filtrados = []
-                            for p in premios:
-                                if normalizar_premio(p) in alvo_norm:
-                                    premios_filtrados.append(p)
-
-
-
-
-                            append_log_premios_filtrado(email, premios_filtrados, giros_total)
-
-                            # msg operacional (consistente)
-                            if premios_filtrados:
-                                msg = f"ROULETA: {giros_total} giros | " + " + ".join(premios_filtrados)
-
-
-
-                            
-                            log_step("👋", "Saindo da conta...", Cores.CINZA)
-                            interagir_com_seguranca(page, 'text:Logout', "click")
+                            log_step("👋", "Saindo...", Cores.CINZA)
+                            clicar_com_seguranca(page, 'text:Logout', "Logout")
                             page.wait.ele_displayed('@alt=LOGIN BUTTON', timeout=15)
                             
                         else:
@@ -667,13 +389,12 @@ def processar(page, conta, url, index, total):
                     log_st = "ERRO SSO"
                     log_step("❌", "Formulário não carregou", Cores.VERMELHO)
         
-        elif page.ele('text:Logout') or page.ele('.page_login__g41B0'):
-            log_step("⚠️", "Já estava logado. Considere limpar cookies.", Cores.AMARELO)
-            interagir_com_seguranca(page, 'text:Logout', "click")
+        elif page.ele('text:Logout'):
+            log_step("⚠️", "Já logado. Limpando.", Cores.AMARELO)
+            clicar_com_seguranca(page, 'text:Logout', "Logout")
             
         else:
              log_st = "ERRO NAV"
-             log_step("❌", "Estado da página desconhecido", Cores.VERMELHO)
 
     except Exception as e:
         msg = str(e)
@@ -685,18 +406,30 @@ def processar(page, conta, url, index, total):
     return sucesso_conta 
 
 def main():
-    if not verificar_licenca_online("checkin"): return
+    if not config.CONF: config.carregar_user_config()
+    
+    # Stub de licença (pode usar o do master ou simplificar)
+    try: 
+        from fabricador.main import verificar_licenca_online as check_lic
+        if not check_lic("checkin"): return
+    except: pass 
+
     os.system('cls' if os.name == 'nt' else 'clear')
     exibir_banner_farm()
     
-    contas = setup_contas()
-    if not contas: return
+    # Carrega contas do arquivo principal
+    contas = carregar_json_seguro(config.ARQUIVO_PRINCIPAL)
+    if not contas:
+        print(f"\n{Cores.AMARELO}⚠️  Nenhuma conta encontrada em '{config.ARQUIVO_PRINCIPAL}'!{Cores.RESET}")
+        return
 
     print(f"\n{Cores.CINZA}>>> Inicializando Motor Gráfico...{Cores.RESET}")
     co = ChromiumOptions()
     co.set_argument('--start-maximized') 
     co.set_argument('--window-size=1920,1080')
-    if CONF.get("headless", False): co.headless(True)
+    
+    # Usa a config global do fabricador
+    if config.CONF.get("headless", False): co.headless(True)
     
     page = ChromiumPage(addr_or_opts=co)
     try: page.set.window.max()
@@ -725,8 +458,6 @@ def main():
     print(f"\n{Cores.VERDE}╔{'═'*(len(msg)+4)}╗\n║  {msg}  ║\n╚{'═'*(len(msg)+4)}╝{Cores.RESET}")
 
     medir_consumo(page, "Fluxo Check-in Completo")
-
-    # enviar_telegram(msg)
     page.quit()
     input("\nEnter para voltar...")
 

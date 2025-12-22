@@ -1,0 +1,37 @@
+[
+    {
+        "email": "borjafilippovye2516@autorambler.ru",
+        "password": "Rag@29604A",
+        "motivo_falha": "LOGIN_FAIL",
+        "data_erro": "2025-12-22 14:07:16",
+        "status": "PRECISA_REPARO"
+    },
+    {
+        "email": "sasharomanovto5235@rambler.ua",
+        "password": "Rag@17826A",
+        "motivo_falha": "LOGIN_FAIL",
+        "data_erro": "2025-12-22 14:15:33",
+        "status": "PRECISA_REPARO"
+    },
+    {
+        "email": "andrejfedorovol6518@myrambler.ru",
+        "password": "Rag@15567A",
+        "motivo_falha": "NO_OTP_EMAIL",
+        "data_erro": "2025-12-22 14:22:55",
+        "status": "PRECISA_REPARO"
+    },
+    {
+        "email": "vasilijrodionovnq9649@myrambler.ru",
+        "password": "Rag@57831A",
+        "motivo_falha": "ERRO_FINAL_ATIVIDADE",
+        "data_erro": "2025-12-22 16:01:21",
+        "status": "PRECISA_REPARO"
+    },
+    {
+        "email": "iljavasilevtz8835@autorambler.ru",
+        "password": "Rag@12431A",
+        "motivo_falha": "ERRO_FINAL_ATIVIDADE",
+        "data_erro": "2025-12-22 18:12:08",
+        "status": "PRECISA_REPARO"
+    }
+]

@@ -3,35 +3,36 @@ import json
 import time
 import unicodedata
 import re
+import sys
 
+# Nome do arquivo de configuração de watchlist
 WATCHLIST_FILE = "premios_watchlist.json"
 
-
 # =========================================================
-# Base path (compatível com EXE PyInstaller)
+# Base path (compatível com EXE PyInstaller e Raiz do Projeto)
 # =========================================================
 def get_base_path():
-    import sys
+    """Retorna o caminho onde o executável ou script principal está rodando."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-
 def _watchlist_path():
     return os.path.join(get_base_path(), WATCHLIST_FILE)
 
-
 def _premios_dir():
-    return os.path.join(get_base_path(), "premios")
-
+    # Cria pasta premios na raiz se não existir
+    p = os.path.join(get_base_path(), "premios")
+    os.makedirs(p, exist_ok=True)
+    return p
 
 def _premios_filtrado_dir():
-    return os.path.join(_premios_dir(), "filtrado")
-
+    p = os.path.join(_premios_dir(), "filtrado")
+    os.makedirs(p, exist_ok=True)
+    return p
 
 def _premios_filtrado_file():
     return os.path.join(_premios_filtrado_dir(), "premios_filtrados.txt")
-
 
 # =========================================================
 # Normalização de prêmio (case-insensitive + sem acento)
@@ -44,7 +45,6 @@ def normalizar_premio(txt: str) -> str:
     txt = "".join(c for c in txt if not unicodedata.combining(c))
     txt = re.sub(r"\s+", " ", txt)
     return txt
-
 
 # =========================================================
 # Watchlist
@@ -60,10 +60,89 @@ def carregar_watchlist():
     except:
         return None
 
-
 def salvar_watchlist(wl: dict):
     with open(_watchlist_path(), "w", encoding="utf-8") as f:
         json.dump(wl, f, ensure_ascii=False, indent=2)
+
+def sync_premios_filtrados_incremental():
+    """
+    Lê TODOS os .txt dentro de /premios/bruto e adiciona (append)
+    no /premios/filtrado/premios_filtrados.txt apenas as linhas com match
+    na watchlist. Não sobrescreve e evita duplicatas.
+    """
+    wl = carregar_watchlist() or {}
+    alvo_norm = set(
+        wl.get("selected_norm")
+        or [normalizar_premio(x) for x in (wl.get("selected") or [])]
+    )
+
+    if not alvo_norm:
+        raise Exception("Watchlist vazia. Configure no Menu 6 antes.")
+
+    bruto_dir = os.path.join(_premios_dir(), "bruto")
+    if not os.path.exists(bruto_dir):
+        # Se não tiver a pasta bruto, cria pra evitar erro, mas avisa
+        os.makedirs(bruto_dir, exist_ok=True)
+        return _premios_filtrado_file(), 0, 0, 0
+
+    out_path = _premios_filtrado_file()
+
+    # carrega linhas já existentes para não duplicar
+    existentes = set()
+    if os.path.exists(out_path):
+        with open(out_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                s = line.strip()
+                if not s: continue
+                if s.startswith("=====") or s.startswith("gerado_em_epoch=") or s.startswith("watchlist_") or s == "-----":
+                    continue
+                existentes.add(s)
+
+    # lista txts somente do bruto
+    txts = []
+    for root, _, files in os.walk(bruto_dir):
+        for fn in files:
+            if fn.lower().endswith(".txt"):
+                txts.append(os.path.join(root, fn))
+
+    if not txts:
+        # Nada para sincronizar
+        return out_path, 0, 0, 0
+
+    total_lidas = 0
+    novas = []
+
+    for path in sorted(txts):
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s or s.startswith("====="): continue
+                    
+                    total_lidas += 1
+
+                    if " | " not in s: continue
+
+                    premio = s.split(" | ")[-1].strip()
+                    if normalizar_premio(premio) in alvo_norm:
+                        if s not in existentes:
+                            novas.append(s)
+                            existentes.add(s)
+        except: pass
+
+    # se arquivo não existe, cria com um header simples
+    arquivo_novo = not os.path.exists(out_path)
+    try:
+        with open(out_path, "a", encoding="utf-8") as f:
+            if arquivo_novo:
+                f.write("===== PREMIOS FILTRADOS (INCREMENTAL) =====\n")
+                f.write(f"criado_em_epoch={int(time.time())}\n")
+                f.write("-----\n")
+            for l in novas:
+                f.write(l + "\n")
+    except: pass
+
+    return out_path, len(txts), total_lidas, len(novas)
 
 
 def configurar_watchlist_manual():
@@ -78,16 +157,15 @@ def configurar_watchlist_manual():
     itens = []
     while True:
         ln = input("> ").strip()
-        if not ln:
-            break
+        if not ln: break
         itens.append(ln)
 
     if not itens:
         print("❌ Nenhum prêmio informado.")
-        input("\nEnter...")
+        time.sleep(1) # Pequeno delay
         return
 
-    # remove duplicados mantendo ordem (e também guarda versão normalizada)
+    # remove duplicados mantendo ordem
     vistos = set()
     itens_unicos = []
     for x in itens:
@@ -108,82 +186,5 @@ def configurar_watchlist_manual():
     for p in itens_unicos:
         print("  -", p)
 
-    input("\nEnter para voltar ao menu...")
-
-
-# =========================================================
-# Opção 7 (SYNC INICIAL): ler todos .txt antigos e gerar 1 filtrado
-# =========================================================
-def gerar_lista_contas_alvo_por_logs():
-    """
-    Lê TODOS os .txt dentro de /premios (raiz + subpastas),
-    e gera /premios/filtrado/premios_filtrados.txt contendo apenas
-    as linhas cujo prêmio bate na watchlist.
-    """
-    wl = carregar_watchlist() or {}
-    alvo_norm = set(wl.get("selected_norm") or [normalizar_premio(x) for x in (wl.get("selected") or [])])
-
-    if not alvo_norm:
-        raise Exception("Watchlist vazia. Configure no Menu 6 antes.")
-
-    base = _premios_dir()
-    if not os.path.exists(base):
-        raise Exception(f"Pasta de prêmios não encontrada: {base}")
-
-    # garante pasta de saída
-    os.makedirs(_premios_filtrado_dir(), exist_ok=True)
-    out_path = _premios_filtrado_file()
-
-    # coleta TODOS .txt em /premios (inclui raiz, bruto, filtrado etc.)
-    txts = []
-    for root, _, files in os.walk(base):
-        for fn in files:
-            if fn.lower().endswith(".txt"):
-                full = os.path.join(root, fn)
-                # evita ler o próprio arquivo final (se já existir)
-                if os.path.abspath(full) == os.path.abspath(out_path):
-                    continue
-                txts.append(full)
-
-    if not txts:
-        raise Exception(f"Não encontrei .txt em: {base}")
-
-    linhas_match = []
-    total_lidas = 0
-
-    # regra simples: uma linha “válida” costuma ter: "] email | giros=" e " | "
-    # seu log real tem esse formato (ex.: “10X PASSAPORTE”, “2X BÊNÇÃO DO FERREIRO”). :contentReference[oaicite:0]{index=0}
-    for path in sorted(txts):
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s:
-                        continue
-                    if s.startswith("====="):
-                        continue
-                    total_lidas += 1
-
-                    # tenta extrair “parte do prêmio” depois do último " | "
-                    # exemplo: "[00:13:25] email | giros=1 | 2X BÊNÇÃO DO FERREIRO" :contentReference[oaicite:1]{index=1}
-                    if " | " not in s:
-                        continue
-                    premio = s.split(" | ")[-1].strip()
-                    if normalizar_premio(premio) in alvo_norm:
-                        linhas_match.append(s)
-        except:
-            continue
-
-    # grava (sobrescreve) o SYNC inicial
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write("===== PREMIOS FILTRADOS (SYNC INICIAL) =====\n")
-        f.write(f"gerado_em_epoch={int(time.time())}\n")
-        f.write(f"watchlist_itens={len(alvo_norm)}\n")
-        f.write(f"arquivos_lidos={len(txts)}\n")
-        f.write(f"linhas_lidas={total_lidas}\n")
-        f.write(f"matches={len(linhas_match)}\n")
-        f.write("-----\n")
-        for l in linhas_match:
-            f.write(l + "\n")
-
-    return out_path, len(txts), total_lidas, len(linhas_match)
+    # Não precisa de input aqui se o master já tem um
+    return
