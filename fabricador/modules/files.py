@@ -3,20 +3,24 @@ import os
 import sys
 from datetime import datetime
 
-# === IMPORTS CORRIGIDOS (Relativos) ===
-# Sobe um nível para pegar o config
+# === IMPORTS RELATIVOS ===
 from .. import config 
+from .logger import log_aviso, log_erro, log_sucesso, log_sistema
 
-# Pega o logger da mesma pasta
-from .logger import log_aviso, log_erro
+# === DEFINIÇÃO DE ARQUIVOS ===
+# Garante que usamos o caminho base definido no config
+ARQUIVO_UTI_JSON = os.path.join(config.BASE_PATH, "uti_contas.json")
+ARQUIVO_SUCESSO = os.path.join(config.BASE_PATH, "novas_contas.json")
+ARQUIVO_PRINCIPAL = config.ARQUIVO_PRINCIPAL # accounts.json
 
 def carregar_json_seguro(caminho):
-    """Lê um arquivo JSON e retorna uma lista, lidando com erros/arquivo inexistente."""
+    """Lê um arquivo JSON e retorna uma lista, lidando com erros."""
     if not os.path.exists(caminho): 
         return []
     try: 
         with open(caminho, "r", encoding="utf-8") as f: 
-            return json.load(f)
+            dados = json.load(f)
+            return dados if isinstance(dados, list) else []
     except: 
         return []
 
@@ -26,101 +30,106 @@ def salvar_json_seguro(caminho, dados):
         with open(caminho, "w", encoding="utf-8") as f: 
             json.dump(dados, f, indent=4, ensure_ascii=False)
         return True
-    except: 
+    except Exception as e: 
+        log_erro(f"Erro ao salvar JSON {caminho}: {e}")
         return False
 
-def consolidar_conta_no_principal(email, senha, seed=None):
-    """
-    Adiciona ou atualiza a conta no arquivo principal (accounts.json).
-    Evita duplicatas checando o e-mail.
-    """
-    contas = carregar_json_seguro(config.ARQUIVO_PRINCIPAL)
-    
-    # Se já existe, não adiciona de novo
-    for c in contas:
-        if c.get('email') == email: 
-            return
+# ==============================================================================
+# FUNÇÕES DE SALVAMENTO (MODERNIZADAS)
+# ==============================================================================
 
-    nova_conta = {"email": email, "password": senha}
-    if seed: 
-        nova_conta["seed_otp"] = seed
-    
-    contas.append(nova_conta)
-    salvar_json_seguro(config.ARQUIVO_PRINCIPAL, contas)
-
-def salvar_conta_backup(email, senha, seed, status="PRONTA_PARA_FARMAR"):
+def salvar_uti(email, senha, motivo):
     """
-    Salva no arquivo de sessão atual (novas_contas.json).
-    Atualiza se o e-mail já estiver lá.
+    [NOVO] Salva conta falha no uti_contas.json com motivo detalhado.
+    Substitui o antigo salvar_para_uti (TXT).
     """
-    dados = carregar_json_seguro(config.ARQUIVO_SALVAR)
-    
-    # Remove entrada antiga desse email se existir
-    dados = [c for c in dados if c.get('email') != email]
-    
-    nova = {
-        "email": email, 
-        "password": senha, 
-        "seed_otp": seed,
-        "data_criacao": datetime.now().strftime("%Y-%m-%d %H:%M"), 
-        "status": status
-    }
-    dados.append(nova)
-    salvar_json_seguro(config.ARQUIVO_SALVAR, dados)
-
-def salvar_para_uti(email, senha_email):
-    """
-    Salva contas que falharam (mas existem) em um arquivo TXT para recuperação manual.
-    Lida com quebras de linha para não encavalar os dados.
-    """
-    # Usa caminho absoluto baseado no config
-    arquivo_uti = config.ARQUIVO_BLACKLIST.replace("blacklist_dominios.txt", "contas_para_uti.txt")
-    
     try:
-        # 1) Sanitiza
-        email = (email or "").replace("\r", "").replace("\n", "").strip()
-        senha_email = (senha_email or "").replace("\r", "").replace("\n", "").strip()
+        lista_uti = carregar_json_seguro(ARQUIVO_UTI_JSON)
+        
+        # Se já existe, atualiza o motivo e data
+        for conta in lista_uti:
+            if conta.get("email") == email:
+                conta["motivo"] = motivo
+                conta["data"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                salvar_json_seguro(ARQUIVO_UTI_JSON, lista_uti)
+                return
 
-        if not email or not senha_email:
-            log_aviso("UTI: email ou senha_email vazios. Ignorando save.")
-            return
-
-        linha = f"{email}:{senha_email}"
-
-        # 2) Garante quebra de linha
-        precisa_quebra = False
-        if os.path.exists(arquivo_uti):
-            try:
-                with open(arquivo_uti, "rb") as f:
-                    if f.tell() == 0:
-                        precisa_quebra = False
-                    else:
-                        f.seek(-1, os.SEEK_END)
-                        ultimo = f.read(1)
-                        precisa_quebra = (ultimo != b"\n")
-            except: pass
-
-        with open(arquivo_uti, "a", encoding="utf-8", newline="\n") as f:
-            if precisa_quebra: f.write("\n")
-            f.write(linha + "\n")
-
-        log_aviso("Conta salva na UTI para reparo posterior.")
-
+        # Cria nova entrada
+        nova_entrada = {
+            "email": email,
+            "password": senha,
+            "motivo": motivo,
+            "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        lista_uti.append(nova_entrada)
+        salvar_json_seguro(ARQUIVO_UTI_JSON, lista_uti)
+        
+        # log_sistema(f"   🚑 Conta enviada para UTI ({motivo})")
+        
     except Exception as e:
         log_erro(f"Falha ao salvar na UTI: {e}")
 
+def salvar_conta_nova(email, senha, seed, status="SUCESSO"):
+    """
+    [NOVO] Função central que salva em TODOS os lugares necessários.
+    1. accounts.json (Banco de dados principal)
+    2. novas_contas.json (Sessão atual)
+    """
+    data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 1. Salva no Principal (Para o Check-in usar depois)
+    try:
+        contas = carregar_json_seguro(ARQUIVO_PRINCIPAL)
+        # Evita duplicatas
+        if not any(c.get('email') == email for c in contas):
+            nova_conta = {
+                "email": email, 
+                "password": senha, 
+                "seed_otp": seed,
+                "data_criacao": data_atual
+            }
+            contas.append(nova_conta)
+            salvar_json_seguro(ARQUIVO_PRINCIPAL, contas)
+    except Exception as e:
+        log_erro(f"Erro ao salvar no principal: {e}")
+
+    # 2. Salva na Sessão (Backup/Relatório)
+    try:
+        lista_sucesso = carregar_json_seguro(ARQUIVO_SUCESSO)
+        # Evita duplicatas
+        if not any(c.get('email') == email for c in lista_sucesso):
+            nova = {
+                "email": email,
+                "password": senha,
+                "seed_otp": seed,
+                "status": status,
+                "data_criacao": data_atual
+            }
+            lista_sucesso.append(nova)
+            salvar_json_seguro(ARQUIVO_SUCESSO, lista_sucesso)
+    except Exception as e:
+        log_erro(f"Erro ao salvar backup de sessão: {e}")
+
+# Mantemos por compatibilidade (se o uti_contas.py antigo chamar)
+salvar_conta_backup = salvar_conta_nova
+
+# ==============================================================================
+# HELPERS
+# ==============================================================================
+
 def extrair_senha_email(sessao):
-    """
-    Tenta achar a senha do e-mail dentro do objeto 'sessao'.
-    """
+    """Tenta achar a senha do e-mail dentro do objeto 'sessao'."""
     if not sessao: return None
 
+    # Procura atributos
     for attr in ("password", "senha", "pass", "pwd"):
         try:
             val = getattr(sessao, attr, None)
             if isinstance(val, str) and val.strip(): return val.strip()
         except: pass
 
+    # Procura chaves de dicionário
     if isinstance(sessao, dict):
         for k in ("password", "senha", "pass", "pwd"):
             v = sessao.get(k)
@@ -129,10 +138,8 @@ def extrair_senha_email(sessao):
     return None
 
 def verificar_licenca_online(tipo):
-    """Stub para verificar licença. Tenta importar do master, senão bypass."""
+    """Stub para verificar licença."""
     try: 
-        # Tenta importar do master que está na raiz
-        # Adiciona raiz ao path se necessário
         sys.path.append(os.path.dirname(config.BASE_PATH))
         from master import verificar_licenca_online as v
         return v(tipo)
